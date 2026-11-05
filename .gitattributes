@@ -1,0 +1,26 @@
+# Define o comportamento padrão de quebra de linha para LF no repositório
+* text=auto eol=lf
+
+# Força arquivos Python e shell script a usarem LF
+*.py text eol=lf
+*.sh text eol=lf
+
+# Força arquivos batch do Windows a usarem CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Arquivos de documentação e dados
+*.md text eol=lf
+*.txt text eol=lf
+*.json text eol=lf
+
+# Binários protegidos contra corrupção de quebra de linha
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.pdf binary
+*.xlsx binary
+*.xls binary
+*.exe binary
