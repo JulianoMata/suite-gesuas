@@ -9,8 +9,8 @@ FORMAÇÃO: Bacharel em Ciência de Dados e Inteligência Artificial | Tecnólog
 DESCRIÇÃO: Ponto de entrada e painel unificado da Suite GESUAS construído em CustomTkinter.
             Disponibiliza arquitetura multithreading por abas para gestão da Auditoria
             Cadastral (cruzamento cronológico de PDFs vs GESUAS) e do Robô de Lançamentos
-            (automação em lote via Excel), com lazy loading de módulos pesados,
-            telemetria em tempo real, checkpoints e cancelamento controlado.
+            (automação em lote via Excel), alternância dinâmica de tema (Dark/Light),
+            manual de uso operacional integrado, telemetria em tempo real e cancelamento seguro.
 ========================================================================================
 """
 
@@ -34,8 +34,159 @@ for caminho in [BASE_DIR, AUDITOR_DIR, AUTOMACAO_DIR]:
     if caminho not in sys.path:
         sys.path.insert(0, caminho)
 
-ctk.set_appearance_mode("System")
+ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
+
+
+class JanelaGuiaUso(ctk.CTkToplevel):
+    """Janela Modal contendo o manual operacional e o fluxo de pastas."""
+    def __init__(self, parent):
+        super().__init__(parent)
+
+        self.title("📖 Guia Operacional — Suite GESUAS")
+        self.geometry("760x600")
+        self.minsize(680, 500)
+        self.transient(parent)
+        self.grab_set()
+
+        self.after(10, self._centralizar)
+
+        frame_corpo = ctk.CTkFrame(self, corner_radius=12)
+        frame_corpo.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(
+            frame_corpo, 
+            text="Central de Ajuda e Instruções Operacionais", 
+            font=("Segoe UI", 18, "bold"),
+            text_color="#3B8ED0"
+        ).pack(pady=(15, 2))
+
+        ctk.CTkLabel(
+            frame_corpo, 
+            text="CRAS Sul — Prefeitura Municipal de Campo Belo / MG", 
+            font=("Segoe UI", 11, "italic"),
+            text_color="gray"
+        ).pack(pady=(0, 10))
+
+        ctk.CTkFrame(frame_corpo, height=2, fg_color="#333333").pack(fill="x", padx=20, pady=5)
+
+        txt_manual = ctk.CTkTextbox(frame_corpo, font=("Consolas", 11), wrap="word")
+        txt_manual.pack(fill="both", expand=True, padx=20, pady=10)
+
+        manual_conteudo = """
+========================================================================================
+GUIA OPERACIONAL E FLUXO DE TRABALHO — SUITE GESUAS
+CRAS Sul — Prefeitura Municipal de Campo Belo / MG
+========================================================================================
+
+DIRETRIZ CENTRAL: A PRIMAZIA DA AUDITORIA CADASTRAL
+----------------------------------------------------------------------------------------
+O fluxo de trabalho adota uma hierarquia estrita: a Auditoria Cadastral (Módulo 1) 
+deve SEMPRE preceder o Robô de Lançamentos (Módulo 2). Lançar atendimentos sem auditar
+previamente pode vincular dados a prontuários desatualizados, desligados ou com 
+inconsistência na composição familiar perante o sistema GESUAS.
+
+
+1. MÓDULO 1: AUDITORIA CADASTRAL (PDFs vs GESUAS) — ETAPA MANDATÓRIA
+----------------------------------------------------------------------------------------
+Objetivo: Cruzar em lote as composições familiares dos prontuários digitalizados (PDF) 
+com a base ativa do GESUAS antes de qualquer manipulação de dados.
+
+  Passo 1: Seleção de Origem e Parâmetros
+    - Indique a 'Pasta Raiz dos PDFs' onde ficam as pastas dos anos (ex: ...\\DADOS).
+    - Selecione o 'Ano' e o 'Mês' que serão auditados no lote.
+    - Defina a 'Pasta de Saída' para receber os relatórios e checkpoints.
+
+  Passo 2: Conexão e Sessão no Microsoft Edge
+    - Clique em '1. Iniciar Auditoria dos PDFs'. O Edge abrirá na porta remota 9222.
+    - Faça o login regular com seu usuário e senha no sistema GESUAS.
+    - Mantenha a aba principal do GESUAS carregada e visível.
+
+  Passo 3: Execução e Controle de Checkpoint
+    - Retorne à Suite e clique em '2. Confirmar Login GESUAS (Iniciar Busca)'.
+    - O motor varrerá os prontuários, comparando membros, parentesco e titularidade (RF).
+    - Inconsistências, divergências e munícipes desligados serão registrados no relatório.
+    - O progresso é salvo continuamente em 'CHECKPOINTS/'. Se interrompido, o lote será 
+      retomado de onde parou (a menos que marque a opção de reiniciar do zero).
+
+
+2. MÓDULO 2: ROBÔ DE LANÇAMENTOS (PLANILHA EXCEL) — ETAPA SUBSEQUENTE
+----------------------------------------------------------------------------------------
+Objetivo: Processar os registros saneados da planilha de trabalho, aplicando regras 
+automáticas de atendimento, visita domiciliar e saneamento cadastral.
+
+  Passo 1: Seleção da Planilha e Destino
+    - Aponte a pasta das planilhas e escolha o arquivo do ano (.xlsx).
+    - Selecione a 'Aba do Mês' correspondente ao período (ex: JANEIRO).
+    - Indique a 'Pasta para Gravar Relatórios' (onde serão geradas as saídas).
+
+  Passo 2: Conexão e Validação da Sessão
+    - Clique em '1. Iniciar Robô de Lançamento'. O Edge abrirá na porta 9222.
+    - Certifique-se de que a sessão no GESUAS está autenticada e na tela de busca.
+
+  Passo 3: Processamento Automatizado e Regras de Negócio
+    - Clique em '2. Confirmar Login GESUAS (Iniciar Robô)'.
+    - O motor processa cada linha aplicando a seguinte inteligência cadastral:
+
+      * CONSULTA (Saneamento Ativo):
+        Verifica o Código Familiar em tela. Se estiver ausente ou divergir da planilha,
+        reabre o último atendimento via 'Iniciar', atualiza o código em 'Editar família',
+        limpa telefones obsoletos e encerra com 'Cadastramento/Atualização'.
+
+      * VISITA / ENTREVISTA DOMICILIAR:
+        Detecta termos de visita nas colunas 'SERVICO' e 'OBS'. Sendo o Responsável 
+        Familiar (RF), assinala compulsoriamente 'Visita Domiciliar' e 'Busca Ativa', 
+        atualiza o Código Familiar e define a Forma de Acesso como 'Busca Ativa 
+        realizada pela equipe da unidade'.
+
+      * ENCERRAMENTO CIRÚRGICO:
+        Desmarca automaticamente opções indevidas (como 'Acompanhamento familiar') e 
+        garante a seleção exclusiva da 3ª opção: 'Cadastramento/Atualização Cadastral'.
+
+
+3. CRIAÇÃO AUTOMÁTICA DA ESTRUTURA DE PASTAS
+----------------------------------------------------------------------------------------
+O sistema cria e organiza automaticamente três diretórios na pasta de saída indicada:
+
+  📁 PLANILHAS_EXCEL/
+     Armazena a planilha atualizada com status 'OK' nos atendimentos concluídos
+     (CADASTRO_ATUALIZADO_[MÊS]_[TIMESTAMP].xlsx) e o log analítico da execução.
+     A planilha de entrada original NUNCA é alterada ou sobrescrita.
+
+  📁 RELATORIOS_PDF/
+     Armazena o relatório oficial consolidado em formato PDF (paisagem), com 
+     cabeçalho institucional, totalizadores por serviço e legendas cromáticas.
+
+  📁 CHECKPOINTS/
+     Armazena os arquivos de estado (.json) da auditoria, permitindo pausar e 
+     retomar rotinas extensas sem perda do trabalho já auditado.
+
+
+4. SEGURANÇA E CONFORMIDADE COM A LGPD
+----------------------------------------------------------------------------------------
+  - A automação NÃO altera campos sensíveis como deficiência (PcD), renda familiar, 
+    escolaridade ou endereço físico, preservando as variáveis que demandam avaliação 
+    social e comprovação presencial.
+  - A conexão via CDP dispensa salvar senhas ou credenciais em código ou arquivos locais.
+========================================================================================
+"""
+        txt_manual.insert("1.0", manual_conteudo.strip())
+        txt_manual.configure(state="disabled")
+
+        ctk.CTkButton(
+            frame_corpo, 
+            text="Entendido / Fechar", 
+            width=140, 
+            height=32,
+            font=("Segoe UI", 11, "bold"),
+            command=self.destroy
+        ).pack(pady=(10, 10))
+
+    def _centralizar(self):
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() // 2) - (760 // 2)
+        y = (self.winfo_screenheight() // 2) - (600 // 2)
+        self.geometry(f"+{x}+{y}")
 
 
 class JanelaSobre(ctk.CTkToplevel):
@@ -112,8 +263,8 @@ class SuiteGesuasApp(ctk.CTk):
         super().__init__()
 
         self.title("Suite GESUAS - Painel Integrado de Operações")
-        self.geometry("980x820")
-        self.minsize(920, 760)
+        self.geometry("980x830")
+        self.minsize(920, 770)
 
         self.protocol("WM_DELETE_WINDOW", self._ao_fechar_janela)
 
@@ -147,16 +298,56 @@ class SuiteGesuasApp(ctk.CTk):
             font=("Segoe UI", 12)
         ).pack(anchor="w")
 
+        # Barra Superior de Ações (Sobre, Guia e Alternador de Tema)
+        frame_acoes_topo = ctk.CTkFrame(frame_cabecalho, fg_color="transparent")
+        frame_acoes_topo.pack(side="right", anchor="e", pady=5)
+
+        self.btn_tema = ctk.CTkButton(
+            frame_acoes_topo,
+            text="☀️ Modo Claro",
+            width=115,
+            height=32,
+            font=("Segoe UI", 11, "bold"),
+            fg_color="#3A3A3A",
+            hover_color="#4A4A4A",
+            command=self._alternar_tema
+        )
+        self.btn_tema.pack(side="right", padx=(6, 0))
+
+        self.btn_guia = ctk.CTkButton(
+            frame_acoes_topo,
+            text="📖 Como Usar / Guia",
+            width=145,
+            height=32,
+            font=("Segoe UI", 11, "bold"),
+            fg_color="#1f538d",
+            hover_color="#14375e",
+            command=self._abrir_guia_uso
+        )
+        self.btn_guia.pack(side="right", padx=(6, 0))
+
         ctk.CTkButton(
-            frame_cabecalho,
-            text="ℹ️ Sobre o Sistema",
-            width=135,
+            frame_acoes_topo,
+            text="ℹ️ Sobre",
+            width=85,
             height=32,
             font=("Segoe UI", 11, "bold"),
             fg_color="#2B2B2B",
             hover_color="#3B3B3B",
             command=self._abrir_sobre
-        ).pack(side="right", anchor="e", pady=5)
+        )
+        self.btn_tema.pack_configure()
+        self.btn_guia.pack_configure()
+        ctk.CTkButton(
+            frame_acoes_topo,
+            text="ℹ️ Sobre",
+            width=80,
+            height=32,
+            font=("Segoe UI", 11, "bold"),
+            fg_color="#2B2B2B",
+            hover_color="#3B3B3B",
+            command=self._abrir_sobre
+        ).pack(side="right")
 
         # Abas Operacionais
         self.tabview = ctk.CTkTabview(self, height=295)
@@ -204,6 +395,19 @@ class SuiteGesuasApp(ctk.CTk):
             state="disabled"
         )
         self.btn_cancelar.pack(fill="x", padx=25, pady=(0, 15))
+
+    def _alternar_tema(self):
+        """Alterna em tempo real entre Dark Mode e Light Mode."""
+        modo_atual = ctk.get_appearance_mode()
+        if modo_atual == "Dark":
+            ctk.set_appearance_mode("Light")
+            self.btn_tema.configure(text="🌙 Modo Escuro")
+        else:
+            ctk.set_appearance_mode("Dark")
+            self.btn_tema.configure(text="☀️ Modo Claro")
+
+    def _abrir_guia_uso(self):
+        JanelaGuiaUso(self)
 
     def _abrir_sobre(self):
         JanelaSobre(self)
