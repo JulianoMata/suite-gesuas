@@ -3,10 +3,7 @@
 > **Vigilância Socioassistencial e Otimização Operacional do Cadastro Único**  
 > **CRAS Sul — Prefeitura Municipal de Campo Belo / MG**
 
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Playwright](https://img.shields.io/badge/RPA-Playwright-orange.svg)](https://playwright.dev/)
-[![CustomTkinter](https://img.shields.io/badge/GUI-CustomTkinter-2cc985.svg)](https://github.com/TomSchimansky/CustomTkinter)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/) [![Playwright](https://img.shields.io/badge/RPA-Playwright-orange.svg)](https://playwright.dev/) [![CustomTkinter](https://img.shields.io/badge/GUI-CustomTkinter-2cc985.svg)](https://github.com/TomSchimansky/CustomTkinter) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
 
@@ -58,7 +55,7 @@ Com foco na integridade das informações socioassistenciais e na conformidade c
 * **Data e Horário do Atendimento:** Preenchimento estrito com carimbo fidedigno extraído da planilha de trabalho.
 * **Vínculo de Atendimento:** Registro padronizado como *"Sem vínculo de serviço"*.
 * **Marcação de Visita Domiciliar:** Detecção semântica unificada (nas colunas `SERVICO` e `OBS`) com marcação compulsória de **"Visita Domiciliar"** e **"Busca Ativa"** no formulário de atendimento quando realizada com o Responsável Familiar (RF).
-* **Forma de Acesso da Família:** 
+* **Forma de Acesso da Família:**
   * Seleciona compulsoriamente *"Busca Ativa realizada pela equipe da unidade"* caso haja visita domiciliar com o RF.
   * Seleciona *"Por demanda espontânea"* para os demais atendimentos de balcão ou consultas.
 * **Código Familiar:** Extração estrita via expressão regular de 11 dígitos após o rótulo do sistema e sanitização de pontuações, gravando o código atualizado da planilha.
@@ -254,4 +251,4 @@ Os resultados estarão prontos para uso no diretório `dist/`.
 
 ## 📜 Licença
 
-Este projeto é distribuído sob os termos da licença [MIT](LICENSE).
+Este projeto é distribuído sob os termos da licença [MIT](LICENSE)
