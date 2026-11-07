@@ -58,7 +58,7 @@ Com foco na integridade das informações socioassistenciais e na conformidade c
 * **Forma de Acesso da Família:**
   * Seleciona compulsoriamente *"Busca Ativa realizada pela equipe da unidade"* caso haja visita domiciliar com o RF.
   * Seleciona *"Por demanda espontânea"* para os demais atendimentos de balcão ou consultas.
-* **Código Familiar:** Extração estrita via expressão regular de 11 dígitos após o rótulo do sistema e sanitização de pontuações, gravando o código atualizado da planilha.
+* **Código Familiar e Não-Regressão:** Extração estrita via expressão regular de 11 dígitos. Em lotes retroativos, preserva o código mais recente já existente na tela do GESUAS e preenche automaticamente quando o prontuário estiver em branco.
 * **Limpeza de Telefones Legados:** Remoção completa de números residenciais/celulares legados desatualizados em *Editar família* para evitar falhas de contato operacional.
 * **Encerramento Cirúrgico:** Desmarcação atômica por índice de todas as opções indevidas (como *"Acompanhamento familiar particularizado"*) e seleção exclusiva da 3ª opção: **"Cadastramento/Atualização Cadastral na GESUAS"**.
 
@@ -91,8 +91,14 @@ Com foco na integridade das informações socioassistenciais e na conformidade c
   * O robô extrai o código de 11 dígitos após o rótulo do prontuário em tela.
   * **Se faltar ou divergir:** Acessa *Editar um Atendimento*, reabre o atendimento mais recente via *Iniciar*, entra em *Editar família*, atualiza o código, limpa telefones, define Demanda Espontânea e finaliza no botão *Encerrar atendimento* com a 3ª opção.
   * Se o código já estiver correto ou se a família não possuir atendimentos prévios, o sistema pula sem intervenções desnecessárias.
+* **Consultas sem Código Familiar (Excluídos / Orientações):** Identifica registros sem código de 11 dígitos (como munícipes excluídos ou orientações em balcão), registrando o status de consulta e a observação no relatório sem alterar o banco indevidamente.
 
-### 4. Tratamento Dinâmico de Membros Não-RF
+### 4. Política de Não-Regressão e Resolução de Alertas no DOM
+
+* **Preservação de Dados Recentes:** Caso o prontuário no GESUAS já possua um código familiar de 11 dígitos preenchido em atendimento posterior ao mês em processamento, o código não é regredido, mantendo-se o dado mais recente.
+* **Captura de Conflito de Duplicidade:** Caso o GESUAS emita alerta modal de código familiar já existente em outro cadastro, o robô fecha o aviso, cancela a janela de edição e desobstrui as camadas de bloqueio de ponteiro (`ui-widget-overlay`), impedindo travamentos por timeout.
+
+### 5. Tratamento Dinâmico de Membros Não-RF
 
 * Caso a pessoa atendida na planilha não seja o Responsável Familiar (RF):
   1. Identifica a pessoa de referência exibida em tela;
@@ -100,16 +106,16 @@ Com foco na integridade das informações socioassistenciais e na conformidade c
   3. Marca exclusivamente o membro atendido na lista de *Pessoas atendidas*;
   4. Mantém a Forma de Acesso e a estrutura familiar principal protegidas de alterações indevidas.
 
-### 5. Tratamento de Tipos e Nulos (Blindagem contra `NaT`)
+### 6. Tratamento de Tipos e Nulos (Blindagem de Matrizes Pandas)
 
-* Parsing seguro de células de data e hora do Excel via `pd.isna()`.
-* Evita falhas críticas de execução do tipo `NaTType does not support strftime` em linhas vazias ou no encerramento da planilha.
+* Conversão e tipagem explícita para `object` em colunas de identificadores e observações, evitando exceções de colisão de tipos (`float64`) ao registrar status `OK` em abas do Excel com campos inteiramente vazios.
+* Parsing seguro de células de data e hora do Excel via `pd.isna()`, prevenindo falhas críticas de `NaTType does not support strftime`.
 
 ---
 
 ## 🖥️ Interface do Usuário
 
-A interface foi projetada com o framework **CustomTkinter** em modo escuro nativo (*Dark Mode*), oferecendo navegação intuitiva dividida entre os dois principais eixos operacionais:
+A interface foi projetada com o framework **CustomTkinter** com alternador dinâmico de tema (*Dark Mode* / *Light Mode*) e janela modal de Guia Operacional integrada no cabeçalho:
 
 | 🔍 Módulo 1: Auditoria Cadastral (PDFs vs GESUAS) | 🤖 Módulo 2: Robô de Lançamentos (Planilhas Excel) |
 | :---: | :---: |
