@@ -2,22 +2,16 @@
 """
 ========================================================================================
 SUITE GESUAS - CENTRAL DE OPERAÇÕES INTEGRADA (CRAS SUL - CAMPO BELO / MG)
-MÓDULO: MOTOR DE AUTOMAÇÃO WEB PLAYWRIGHT (automacao_engine.py / gesuas_bot)
+MÓDULO: MOTOR DE AUTOMAÇÃO WEB PLAYWRIGHT (automacao_engine.py)
 AUTORIA: Juliano França da Mata
 CARGO: Agente Administrativo / Operador do Cadastro Único - CRAS Sul (Campo Belo/MG)
 FORMAÇÃO: Bacharel em Ciência de Dados e Inteligência Artificial | Tecnólogo em Gestão de TI
-DESCRIÇÃO: Orquestra o pipeline de lançamentos da Suite GESUAS herdando a engenharia
-            do gesuas_bot.py:
-            - Conexão CDP ao Edge na porta de depuração (9222);
-            - Busca inteligente resiliente (CPF de 11 dígitos com fallback por Nome);
-            - Tratamento de 'Pessoa Desligada' e múltiplos cadastros;
-            - Extração profunda em 'Editar um Atendimento' (Anti-duplicidade via DOM JS);
-            - Ajuste de Não-RF com desmarcação dinâmica de checkboxes;
-            - Preenchimento estrito de data/hora (delay 35ms), Sem vínculo de serviço;
-            - Atualização de Código Familiar, limpeza de Telefone e Demanda Espontânea;
-            - Encerramento com 'Cadastramento/Atualização Cadastral' e retorno por '<';
-            - Preserva a planilha original e gera cópia sincronizada em PLANILHAS_EXCEL;
-            - Geração de relatório analítico em Excel e relatório oficial em PDF.
+DESCRIÇÃO: Orquestra o pipeline de lançamentos da Suite GESUAS com:
+            - Extração estrita do Código Familiar de 11 dígitos após o rótulo;
+            - Encerramento cirúrgico com a 3ª opção isolada por índice direto;
+            - Gravação de checkboxes via botão 'Iniciar' na edição de atendimento;
+            - Saneamento cadastral compulsório em 'Editar família';
+            - Retorno confiável à sanfona 'Buscar pessoa'.
 ========================================================================================
 """
 
@@ -26,6 +20,7 @@ import sys
 import re
 import time
 import subprocess
+import unicodedata
 from datetime import datetime, date, time as datetime_time
 import pandas as pd
 from playwright.sync_api import sync_playwright
@@ -37,8 +32,23 @@ if DIRETORIO_ATUAL not in sys.path:
 import relatorio_pdf
 
 
+def normalizar_texto(texto: str) -> str:
+    """Remove acentuações e caracteres especiais, retornando texto em caixa alta."""
+    if not texto or not isinstance(texto, str):
+        return ""
+    texto = unicodedata.normalize('NFKD', texto).encode('ASCII', 'ignore').decode('utf-8')
+    return re.sub(r'\s+', ' ', texto).strip().upper()
+
+
+def eh_servico_visita_domiciliar(servico_raw: str, obs_raw: str = "") -> bool:
+    """Detecta se há menção a visita/entrevista domiciliar no serviço ou na observação."""
+    texto_combinado = f"{normalizar_texto(servico_raw)} {normalizar_texto(obs_raw)}"
+    termos = ["VISITA", "DOMICILI", "DOMICILIO", "EM DOMICILIO", "ENTREVISTA DOMICILIAR"]
+    return any(termo in texto_combinado for termo in termos)
+
+
 def formatar_data_segura(valor) -> str:
-    """Converte valores de data da planilha para DD/MM/AAAA, sem falhar com NaT ou nulos."""
+    """Converte valores de data da planilha para DD/MM/AAAA."""
     if valor is None or pd.isna(valor):
         return ""
     if isinstance(valor, (datetime, date)):
@@ -55,7 +65,7 @@ def formatar_data_segura(valor) -> str:
 
 
 def formatar_hora_segura(valor) -> str:
-    """Converte valores de hora da planilha para HH:MM, sem falhar com NaT ou nulos."""
+    """Converte valores de hora da planilha para HH:MM."""
     if valor is None or pd.isna(valor):
         return ""
     if isinstance(valor, (datetime, datetime_time)):
@@ -99,7 +109,7 @@ def iniciar_edge():
 
 
 def conectar_pagina_gesuas(browser):
-    """Localiza a aba ativa do GESUAS ou traz a última aba aberta para foco."""
+    """Localiza a aba ativa do GESUAS."""
     context = browser.contexts[0]
     page = None
     for p_aba in context.pages:
@@ -117,7 +127,7 @@ def conectar_pagina_gesuas(browser):
 
 
 def fechar_modal_erro_busca(page):
-    """Fecha janelas modais de erro de busca caso o GESUAS emita aviso de CPF/campo."""
+    """Fecha janelas modais de erro de busca."""
     try:
         modal_erro = page.locator('.ui-dialog:visible:has-text("Erro ao efetuar busca")')
         if modal_erro.count() > 0 and modal_erro.first.is_visible():
@@ -131,10 +141,28 @@ def fechar_modal_erro_busca(page):
         pass
 
 
+def fechar_todas_modais_ativas(page):
+    """Fecha todas as modais do jQuery UI via JS sem ser interceptado pelo overlay."""
+    try:
+        page.evaluate("""() => {
+            const modais = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
+            for (const m of modais) {
+                const btnX = m.querySelector('.ui-dialog-titlebar-close');
+                if (btnX) btnX.click();
+            }
+        }""")
+        page.wait_for_timeout(400)
+    except Exception:
+        pass
+
+
 def retornar_para_busca(page):
-    """Garante retorno ao painel de busca clicando no botão '<' ou na sanfona."""
+    """Retorna ao painel de busca clicando no botão '<' ou na aba 'Buscar pessoa'."""
+    fechar_todas_modais_ativas(page)
     try:
         btn_seta_voltar = page.locator('button:has-text("Agendar Atendimento"), a:has-text("Agendar Atendimento")').locator('xpath=preceding-sibling::*[1]').first
+        if not btn_seta_voltar.is_visible():
+            btn_seta_voltar = page.locator('a:visible:has-text("<"), button:visible:has-text("<")').first
         if btn_seta_voltar.is_visible():
             btn_seta_voltar.click()
             page.wait_for_timeout(1000)
@@ -150,14 +178,13 @@ def retornar_para_busca(page):
 
 
 def buscar_municipe(page, nome, cpf, fila):
-    """Executa a busca inteligente por CPF (se 11 dígitos) e fallback por Nome."""
+    """Executa a busca por CPF (11 dígitos) com fallback por Nome."""
     retornar_para_busca(page)
     campo_cpf = page.locator('#pessoa_search_cpf')
 
     cpf_digitos = re.sub(r'\D', '', str(cpf)) if cpf and str(cpf).lower() not in ['nan', 'none', 'nat'] else ""
     achou_resultado = False
 
-    # 1. Busca por CPF
     if len(cpf_digitos) == 11:
         campo_cpf.wait_for(state="visible", timeout=5000)
         campo_cpf.click()
@@ -169,9 +196,8 @@ def buscar_municipe(page, nome, cpf, fila):
         if not page.locator('text="Não foram encontradas pessoas"').is_visible() and page.locator('text="Pessoas encontradas"').is_visible():
             achou_resultado = True
 
-    # 2. Busca por Nome (Fallback)
     if not achou_resultado:
-        fila.put({"tipo": "log", "msg": f"   [!] CPF não localizou. Buscando diretamente por Nome: {nome}...\n"})
+        fila.put({"tipo": "log", "msg": f"   [!] CPF não localizou. Buscando por Nome: {nome}...\n"})
         campo_cpf.fill("")
         fechar_modal_erro_busca(page)
 
@@ -191,7 +217,7 @@ def buscar_municipe(page, nome, cpf, fila):
 
 
 def verificar_pessoa_desligada_ou_acessar_familia(page, nome, fila):
-    """Verifica se a pessoa está desligada ou se há múltiplos cadastros; acessa família."""
+    """Verifica desligamento ou múltiplos cadastros e acessa a tela da família."""
     page.locator('text="Pessoas encontradas"').wait_for(state="visible", timeout=7000)
     page.wait_for_timeout(500)
 
@@ -213,7 +239,7 @@ def verificar_pessoa_desligada_ou_acessar_familia(page, nome, fila):
 
     linhas_pessoas = page.locator('#pessoasListDiv').locator('text="Código Familiar"')
     if linhas_pessoas.count() > 1:
-        fila.put({"tipo": "log", "msg": f"   [AVISO] Múltiplos cadastros para '{nome}'. Acesse a família no Edge manualmente se necessário.\n"})
+        fila.put({"tipo": "log", "msg": f"   [AVISO] Múltiplos cadastros para '{nome}'. Acesse a família no Edge se necessário.\n"})
         page.wait_for_timeout(1500)
     
     btn_boneco = page.locator('a[title*="Ver cadastro da família"], button[title*="Ver cadastro da família"]').first
@@ -225,55 +251,8 @@ def verificar_pessoa_desligada_ou_acessar_familia(page, nome, fila):
     return "OK"
 
 
-def checar_duplicidade_atendimento(page, data_hora_str, data_atend, hora_atend, fila):
-    """Abre 'Editar um Atendimento', lê via JS assíncrono e valida duplicidade."""
-    btn_editar = page.locator('button:visible:has-text("Editar um Atendimento"), a:visible:has-text("Editar um Atendimento")').first
-    try:
-        btn_editar.wait_for(state="visible", timeout=6000)
-    except Exception:
-        return False
-
-    btn_editar.click()
-    page.wait_for_timeout(1500)
-
-    texto_historico = page.evaluate("""() => {
-        const dialogs = Array.from(document.querySelectorAll('.ui-dialog, div[role="dialog"]'))
-                             .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
-        for (const d of dialogs) {
-            if (d.innerText.includes('Data do atendimento') || d.innerText.includes('Editar')) {
-                return d.innerText;
-            }
-        }
-        return document.body.innerText;
-    }""")
-
-    texto_limpo = " ".join(texto_historico.split())
-
-    btn_fechar_x = page.locator('.ui-dialog:visible .ui-dialog-titlebar-close, .ui-dialog:visible button[title="close"], .ui-dialog:visible .ui-icon-closethick').first
-    if btn_fechar_x.is_visible():
-        btn_fechar_x.click()
-        page.wait_for_timeout(600)
-
-    ja_cadastrado = False
-    if (data_hora_str in texto_limpo) or (data_atend in texto_limpo and hora_atend in texto_limpo):
-        ja_cadastrado = True
-
-    if ja_cadastrado:
-        fila.put({"tipo": "log", "msg": f"   [JÁ CADASTRADO] Atendimento de {data_hora_str} já consta no GESUAS! Retornando...\n"})
-        btn_seta_voltar = page.locator('button:has-text("Agendar Atendimento"), a:has-text("Agendar Atendimento")').locator('xpath=preceding-sibling::*[1]').first
-        if not btn_seta_voltar.is_visible():
-            btn_seta_voltar = page.locator('a:visible:has-text("<"), button:visible:has-text("<")').first
-        if btn_seta_voltar.is_visible():
-            btn_seta_voltar.click()
-        page.wait_for_timeout(1500)
-        return True
-
-    return False
-
-
-def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, fila):
-    """Executa o lançamento de atendimento com o pipeline refinado do gesuas_bot."""
-    # 1. Identificação do RF
+def verificar_titularidade_rf(page, cpf_municipe, nome_municipe) -> tuple[bool, str]:
+    """Valida se o munícipe é o Responsável Familiar (RF) da composição exibida."""
     nome_rf_tela = ""
     try:
         linha_rf = page.locator('tr:has-text("Pessoa de referência")').first
@@ -288,11 +267,367 @@ def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, 
         pass
 
     nome_rf_tela = nome_rf_tela.replace("▲", "").replace("!", "").strip()
-    partes_nome = nome.strip().upper().split()
-    chave_busca = f"{partes_nome[0]} {partes_nome[1]}" if len(partes_nome) > 1 else partes_nome[0]
-    eh_responsavel_familiar = (chave_busca in nome_rf_tela.upper()) if nome_rf_tela else True
+    cpf_limpo = re.sub(r'\D', '', str(cpf_municipe))
+    eh_rf = False
 
-    # 2. Iniciar atendimento na tela da família
+    if len(cpf_limpo) == 11:
+        try:
+            eh_rf = page.evaluate("""(cpfAlvo) => {
+                const linhas = Array.from(document.querySelectorAll('table tr'));
+                for (const tr of linhas) {
+                    if (tr.innerText.includes('Pessoa de referência') && tr.innerText.replace(/\\D/g, '').includes(cpfAlvo)) {
+                        return true;
+                    }
+                }
+                return false;
+            }""", cpf_limpo)
+        except Exception:
+            eh_rf = False
+
+    if not eh_rf and nome_rf_tela:
+        partes_nome = nome_municipe.strip().upper().split()
+        chave = f"{partes_nome[0]} {partes_nome[1]}" if len(partes_nome) > 1 else partes_nome[0]
+        eh_rf = chave in nome_rf_tela.upper()
+
+    return eh_rf, nome_rf_tela
+
+
+def obter_codigo_familiar_tela(page) -> str:
+    """Extrai rigorosamente os 11 dígitos que sucedem o termo 'Cód. familiar:' na tela."""
+    try:
+        texto_tela = page.evaluate("""() => document.body.innerText""")
+        m = re.search(r'C[oó]d(?:igo)?\.?\s*familiar[^\d\n\r]*(\d{11})', texto_tela, re.IGNORECASE)
+        if m:
+            return m.group(1)
+        return ""
+    except Exception:
+        return ""
+
+
+def aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf: bool, fila):
+    """Acessa 'Editar família' (botão abaixo à esquerda) para sanear Código, limpar Telefones e definir Acesso."""
+    fechar_todas_modais_ativas(page)
+    fila.put({"tipo": "log", "msg": " -> Acessando 'Editar família' (abaixo à esquerda) para saneamento...\n"})
+    
+    btn_editar_fam = page.locator('button:visible:has-text("Editar família"), a:visible:has-text("Editar família")').first
+    try:
+        btn_editar_fam.wait_for(state="visible", timeout=6000)
+        btn_editar_fam.click()
+        page.wait_for_timeout(1200)
+    except Exception:
+        fila.put({"tipo": "log", "msg": "   [AVISO]: Botão 'Editar família' não clicável.\n"})
+        return
+
+    modal_fam = page.locator('.ui-dialog:visible:has-text("Editar família"), div[role="dialog"]:visible:has-text("Editar família")').last
+    if not modal_fam.is_visible():
+        return
+
+    # 1. Código Familiar
+    if cod_fam and str(cod_fam).strip() and str(cod_fam).lower() not in ['nan', 'none']:
+        cod_limpo = re.sub(r'\D', '', str(cod_fam)).strip()
+        fila.put({"tipo": "log", "msg": f"   -> Atualizando Código Familiar para: {cod_limpo}...\n"})
+        campo_cod = modal_fam.locator('text="Código familiar"').locator('xpath=following-sibling::input | ../following-sibling::*//input | following::input[1]').first
+        if not campo_cod.is_visible():
+            campo_cod = modal_fam.locator('input[name*="codigo_familiar"], input[id*="codigo_familiar"]').first
+
+        if campo_cod.is_visible():
+            campo_cod.click()
+            campo_cod.press("Control+A")
+            campo_cod.press("Backspace")
+            campo_cod.type(cod_limpo, delay=25)
+            page.wait_for_timeout(150)
+
+    # 2. Limpeza de Telefones
+    fila.put({"tipo": "log", "msg": "   -> Limpando campo de telefone residencial / celular...\n"})
+    page.evaluate("""() => {
+        const dialog = Array.from(document.querySelectorAll('.ui-dialog, div[role="dialog"]'))
+                            .find(d => d.innerText.includes('Editar família'));
+        if (!dialog) return;
+        const inputs = Array.from(dialog.querySelectorAll('input[type="text"]'));
+        inputs.forEach(inp => {
+            const rotulo = (inp.closest('tr, div') ? inp.closest('tr, div').innerText : '').toUpperCase();
+            if (rotulo.includes('TELEFONE') || rotulo.includes('CELULAR')) {
+                inp.value = '';
+                inp.dispatchEvent(new Event('change', { bubbles: true }));
+                inp.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+        });
+    }""")
+    page.wait_for_timeout(200)
+
+    # 3. Forma de Acesso
+    termo_acesso = "Busca Ativa realizada pela equipe da unidade" if eh_visita_rf else "Por demanda espontânea"
+    fila.put({"tipo": "log", "msg": f"   -> Forma de Acesso configurada para: '{termo_acesso}'\n"})
+    page.evaluate("""(opcaoDesejada) => {
+        const selects = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"]) select'));
+        for (const sel of selects) {
+            for (const opt of sel.options) {
+                if (opt.text.toUpperCase().includes(opcaoDesejada.toUpperCase())) {
+                    sel.value = opt.value;
+                    sel.dispatchEvent(new Event('change', { bubbles: true }));
+                    return;
+                }
+            }
+        }
+    }""", termo_acesso)
+    page.wait_for_timeout(300)
+
+    # 4. Gravação da Modal
+    btn_ok = modal_fam.locator('button:visible:has-text("OK"), .ui-dialog-buttonpane button:has-text("OK")').first
+    if btn_ok.is_visible():
+        btn_ok.click()
+        page.wait_for_timeout(1500)
+
+
+def encerrar_atendimento_ativo(page, fila):
+    """
+    Encerra o atendimento aberto:
+    1. Clica no botão 'Encerrar atendimento'.
+    2. Itera diretamente pela lista de checkboxes: desmarca todos exceto o 3º (índice 2).
+    3. Clica no botão OK da barra inferior.
+    """
+    btn_encerrar = page.locator('a:has-text("Encerrar atendimento"), button:has-text("Encerrar atendimento")').first
+    try:
+        btn_encerrar.wait_for(state="visible", timeout=6000)
+    except Exception:
+        return
+
+    fila.put({"tipo": "log", "msg": " -> Abrindo modal 'Encerrar atendimento'...\n"})
+    btn_encerrar.click()
+    page.wait_for_timeout(1500)
+
+    # Manipulação atômica via JavaScript: desmarca os índices 0, 1 e 3+, e marca exclusivamente o índice 2
+    fechou_ok = page.evaluate("""() => {
+        const dialogs = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
+        const modal = dialogs.find(d => d.innerText.includes('Encerrar Atendimento') || d.innerText.includes('Tipos'));
+        if (!modal) return false;
+
+        const checkboxes = Array.from(modal.querySelectorAll('input[type="checkbox"]'));
+        
+        checkboxes.forEach((chk, index) => {
+            if (index === 2) {
+                // 3ª opção: Cadastramento/Atualização Cadastral na GESUAS
+                if (!chk.checked) {
+                    chk.click();
+                }
+                chk.checked = true;
+            } else {
+                // Qualquer outra opção (incluindo a 1ª: Acompanhamento familiar particularizado)
+                if (chk.checked) {
+                    chk.click();
+                }
+                chk.checked = false;
+            }
+            chk.dispatchEvent(new Event('change', { bubbles: true }));
+        });
+
+        // Clica no botão OK da janela modal
+        const botoes = Array.from(modal.querySelectorAll('.ui-dialog-buttonpane button, button'));
+        const btnOk = botoes.find(b => b.innerText.trim().toUpperCase() === 'OK');
+        if (btnOk) {
+            btnOk.click();
+            return true;
+        }
+        return false;
+    }""")
+
+    page.wait_for_timeout(1500)
+    if not fechou_ok:
+        btn_ok_pane = page.locator('.ui-dialog:visible:has-text("Encerrar Atendimento") .ui-dialog-buttonpane button:has-text("OK")').first
+        if btn_ok_pane.is_visible():
+            btn_ok_pane.click()
+            page.wait_for_timeout(1500)
+
+    fechar_todas_modais_ativas(page)
+
+
+def sanear_consulta_ultimo_atendimento(page, cod_fam_planilha, fila) -> str:
+    """
+    Exclusivo para CONSULTA realizada pelo RF:
+    1. Compara o Código Familiar da tela com o da planilha.
+    2. Se faltar/divergir: abre histórico, reabre o mais recente via 'Iniciar',
+       saneia em 'Editar família', encerra com 'Cadastramento/Atualização' e volta para a busca.
+    """
+    cod_planilha_limpo = re.sub(r'\D', '', str(cod_fam_planilha)).strip()
+    cod_tela_limpo = obter_codigo_familiar_tela(page)
+
+    if cod_tela_limpo and cod_tela_limpo == cod_planilha_limpo:
+        fila.put({"tipo": "log", "msg": f"   -> [CONSULTA]: Código Familiar ({cod_tela_limpo}) coincide com a planilha. Sem alterações.\n"})
+        retornar_para_busca(page)
+        return "Consulta - Código já atualizado"
+
+    fila.put({"tipo": "log", "msg": f"   -> [DIVERGÊNCIA/AUSÊNCIA]: Código no GESUAS ('{cod_tela_limpo}') difere da planilha ('{cod_planilha_limpo}').\n"})
+    fila.put({"tipo": "log", "msg": "   -> Acessando histórico em 'Editar um Atendimento' para vincular alteração...\n"})
+
+    btn_editar = page.locator('button:visible:has-text("Editar um Atendimento"), a:visible:has-text("Editar um Atendimento")').first
+    try:
+        btn_editar.wait_for(state="visible", timeout=6000)
+    except Exception:
+        retornar_para_busca(page)
+        return "Consulta (Histórico indisponível)"
+
+    btn_editar.click()
+    page.wait_for_timeout(1800)
+
+    abriu_edicao = page.evaluate("""() => {
+        const dialogs = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
+        for (const d of dialogs) {
+            const btnEd = d.querySelector('a, button, .ui-icon-pencil');
+            if (btnEd && (btnEd.innerText.toUpperCase().includes('EDITAR') || (btnEd.title && btnEd.title.toLowerCase().includes('editar')) || btnEd.className.includes('ui-icon-pencil'))) {
+                btnEd.click();
+                return true;
+            }
+        }
+        return false;
+    }""")
+
+    page.wait_for_timeout(1500)
+
+    if not abriu_edicao:
+        fila.put({"tipo": "log", "msg": "   -> [CONSULTA]: Família sem atendimentos anteriores registrados. Desconsiderando saneamento...\n"})
+        fechar_todas_modais_ativas(page)
+        retornar_para_busca(page)
+        return "Consulta mantida (Sem atendimentos anteriores)"
+
+    fila.put({"tipo": "log", "msg": "   -> Reabrindo último atendimento via botão 'Iniciar'...\n"})
+    page.evaluate("""() => {
+        const modais = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
+        for (const m of modais) {
+            const btnIniciar = Array.from(m.querySelectorAll('button, a')).find(b => b.innerText.trim().toUpperCase() === 'INICIAR');
+            if (btnIniciar) {
+                btnIniciar.click();
+                return;
+            }
+        }
+    }""")
+    page.wait_for_timeout(1800)
+    fechar_todas_modais_ativas(page)
+
+    aplicar_saneamento_editar_familia(page, cod_planilha_limpo, eh_visita_rf=False, fila=fila)
+    encerrar_atendimento_ativo(page, fila)
+    retornar_para_busca(page)
+
+    return "Consulta - Código Familiar saneado no último atendimento"
+
+
+def checar_duplicidade_e_adequar_visita(page, data_hora_str, data_atend, hora_atend, eh_visita_rf: bool, cod_fam: str, fila=None) -> tuple[bool, str]:
+    """
+    Verifica duplicidade de atendimento. Se for Visita Domiciliar pré-existente com RF,
+    reabre o atendimento via 'Iniciar', marca os checkboxes, saneia a família e encerra.
+    """
+    def log(msg):
+        if fila:
+            fila.put({"tipo": "log", "msg": msg})
+        else:
+            print(msg.strip())
+
+    btn_editar = page.locator('button:visible:has-text("Editar um Atendimento"), a:visible:has-text("Editar um Atendimento")').first
+    try:
+        btn_editar.wait_for(state="visible", timeout=6000)
+    except Exception:
+        return False, ""
+
+    btn_editar.click()
+    page.wait_for_timeout(1800)
+
+    dados_historico = page.evaluate("""(alvoDataHora) => {
+        const dialogs = Array.from(document.querySelectorAll('.ui-dialog, div[role="dialog"]'))
+                             .filter(el => el.offsetWidth > 0 && el.offsetHeight > 0);
+        let textoCompleto = '';
+        for (const d of dialogs) {
+            textoCompleto += ' ' + d.innerText;
+        }
+        return {
+            texto: textoCompleto,
+            existe: textoCompleto.includes(alvoDataHora)
+        };
+    }""", data_hora_str)
+
+    texto_limpo = " ".join(dados_historico["texto"].split())
+    ja_cadastrado = dados_historico["existe"] or (data_atend in texto_limpo and hora_atend in texto_limpo)
+
+    diag_visita = ""
+
+    if ja_cadastrado:
+        log(f"   -> [HISTÓRICO LOCALIZADO]: Atendimento de {data_hora_str} encontrado no histórico.\n")
+        
+        # Clica no botão 'Editar' da linha da data alvo
+        page.evaluate("""(dataAlvo) => {
+            const dialogs = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
+            for (const d of dialogs) {
+                const linhas = Array.from(d.querySelectorAll('tr, .ui-widget-content'));
+                for (const tr of linhas) {
+                    if (tr.innerText.includes(dataAlvo)) {
+                        const btnEd = tr.querySelector('a, button, .ui-icon-pencil');
+                        if (btnEd) {
+                            btnEd.click();
+                            return true;
+                        }
+                    }
+                }
+            }
+            const botoes = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"]) a, .ui-dialog:not([style*="display: none"]) button'))
+                                .filter(b => (b.innerText && b.innerText.toUpperCase().includes('EDITAR')) || (b.title && b.title.toLowerCase().includes('editar')));
+            if (botoes.length > 0) {
+                botoes[0].click();
+                return true;
+            }
+            return false;
+        }""", data_atend)
+        page.wait_for_timeout(1500)
+
+        if eh_visita_rf:
+            log("   -> Marcando checkboxes 'Visita Domiciliar' e 'Busca Ativa'...\n")
+            page.evaluate("""() => {
+                const modais = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
+                for (const modal of modais) {
+                    const checkboxes = Array.from(modal.querySelectorAll('input[type="checkbox"]'));
+                    checkboxes.forEach(chk => {
+                        const rotulo = (chk.closest('tr, td, label, div') ? chk.closest('tr, td, label, div').innerText : '').toUpperCase();
+                        if (rotulo.includes('VISITA DOMICILIAR') || rotulo.includes('BUSCA ATIVA')) {
+                            if (!chk.checked) chk.click();
+                        }
+                    });
+                }
+            }""")
+            page.wait_for_timeout(500)
+
+            log("   -> Gravando edição do atendimento no botão 'Iniciar'...\n")
+            page.evaluate("""() => {
+                const modais = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
+                for (const m of modais) {
+                    const btnIniciar = Array.from(m.querySelectorAll('button, a')).find(b => b.innerText.trim().toUpperCase() === 'INICIAR');
+                    if (btnIniciar) {
+                        btnIniciar.click();
+                        return;
+                    }
+                }
+            }""")
+            page.wait_for_timeout(1800)
+            fechar_todas_modais_ativas(page)
+
+            aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf=True, fila=fila)
+            encerrar_atendimento_ativo(page, fila)
+            diag_visita = "Visita Domiciliar editada e confirmada no GESUAS"
+
+        else:
+            log("   -> Atendimento comum já existente. Fechando histórico...\n")
+            fechar_todas_modais_ativas(page)
+            diag_visita = "Atendimento comum existente (Auditado)"
+
+        retornar_para_busca(page)
+        return True, diag_visita
+
+    fechar_todas_modais_ativas(page)
+    return False, ""
+
+
+def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, servico_planilha, obs_planilha, cpf_municipe, fila):
+    """Executa o ciclo completo de lançamento novo (incluindo INCLUSAO e ATUALIZACAO)."""
+    eh_visita = eh_servico_visita_domiciliar(servico_planilha, obs_planilha)
+    eh_rf, nome_rf_tela = verificar_titularidade_rf(page, cpf_municipe, nome)
+    eh_visita_rf = eh_visita and eh_rf
+
     btn_iniciar_tela = page.locator('button:visible:has-text("Iniciar atendimento"), a:visible:has-text("Iniciar atendimento")').filter(has_not=page.locator('#btnNovaFamiliaIniciarAtendimento')).first
     btn_iniciar_tela.wait_for(state="visible", timeout=7000)
     btn_iniciar_tela.click()
@@ -302,9 +637,8 @@ def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, 
     modal_conteudo.wait_for(state="visible", timeout=10000)
     page.wait_for_timeout(500)
 
-    # 3. Tratamento de Não-RF
     obs_membro = ""
-    if not eh_responsavel_familiar:
+    if not eh_rf:
         fila.put({"tipo": "log", "msg": f"   [ALERTA MEMBRO] Munícipe ({nome}) NÃO é o RF (RF na tela: {nome_rf_tela}). Ajustando checkboxes...\n"})
         obs_membro = f" (Não é RF - RF: {nome_rf_tela[:20]})"
 
@@ -337,7 +671,6 @@ def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, 
         }""", nome)
         page.wait_for_timeout(500)
 
-    # 4. Preenchimento estrito de Data e Hora
     campo_data = modal_conteudo.locator('text="Data do atendimento:"').locator('xpath=following-sibling::input | ../following-sibling::*//input | following::input[1]').first
     if not campo_data.is_visible():
         campo_data = modal_conteudo.locator('input[name*="data"], input[id*="data"]').last
@@ -353,107 +686,42 @@ def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, 
         btn_fechar_cal.click()
     else:
         page.keyboard.press("Escape")
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(300)
 
-    # 5. Serviço Socioassistencial: Sem vínculo de serviço com disparo de eventos
     select_servico = modal_conteudo.locator('select:has-text("Selecione um Serviço"), select[name*="servico"]').first
     select_servico.focus()
     select_servico.select_option(label="Sem vínculo de serviço")
     select_servico.dispatch_event("change")
     select_servico.dispatch_event("input")
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(400)
 
-    # 6. Iniciar atendimento no modal
+    if eh_visita_rf:
+        fila.put({"tipo": "log", "msg": "   -> [VISITA DOMICILIAR / RF]: Marcando caixas 'Visita Domiciliar' e 'Busca Ativa'...\n"})
+        page.evaluate("""() => {
+            const checkboxes = Array.from(document.querySelectorAll('#_iniciarAtendimento input[type="checkbox"]'));
+            checkboxes.forEach(chk => {
+                const rotulo = (chk.closest('tr, label, td, div') ? chk.closest('tr, label, td, div').innerText : '').toUpperCase();
+                if (rotulo.includes('VISITA DOMICILIAR') || rotulo.includes('BUSCA ATIVA')) {
+                    if (!chk.checked) chk.click();
+                }
+            });
+        }""")
+        page.wait_for_timeout(300)
+
     dialog_pai = modal_conteudo.locator('xpath=ancestor::div[contains(@class, "ui-dialog")]').first
     btn_iniciar_modal = dialog_pai.locator('.ui-dialog-buttonpane button:has-text("Iniciar"), button:has-text("Iniciar")').first
     btn_iniciar_modal.click()
     page.wait_for_timeout(2000)
 
-    # 7. Editar Família (Código Familiar, Telefone e Demanda)
-    fila.put({"tipo": "log", "msg": " -> Acessando 'Editar família' para saneamento cadastral...\n"})
-    btn_editar_fam = page.locator('button:visible:has-text("Editar família"), a:visible:has-text("Editar família")').first
-    try:
-        btn_editar_fam.wait_for(state="visible", timeout=6000)
-        btn_editar_fam.click()
-        page.wait_for_timeout(1000)
-    except Exception as e_ed:
-        fila.put({"tipo": "log", "msg": f"   [AVISO]: Botão 'Editar família' não clicável ({str(e_ed)}).\n"})
+    # Executa o saneamento na tela de 'Editar família'
+    aplicar_saneamento_editar_familia(page, cod_fam_planilha, eh_visita_rf=eh_visita_rf, fila=fila)
+    
+    # Encerra o atendimento com a 3ª opção exclusiva
+    encerrar_atendimento_ativo(page, fila)
+    retornar_para_busca(page)
 
-    modal_fam = page.locator('.ui-dialog:visible:has-text("Editar família"), div[role="dialog"]:visible:has-text("Editar família")').last
-    if modal_fam.is_visible():
-        # 7.1. Código Familiar
-        if cod_fam_planilha and str(cod_fam_planilha).strip() and str(cod_fam_planilha).lower() not in ['nan', 'none']:
-            cod_limpo = re.sub(r'\D', '', str(cod_fam_planilha)).strip()
-            fila.put({"tipo": "log", "msg": f"   -> Atualizando Código Familiar para: {cod_limpo}...\n"})
-
-            campo_cod = modal_fam.locator('text="Código familiar"').locator('xpath=following-sibling::input | ../following-sibling::*//input | following::input[1]').first
-            if not campo_cod.is_visible():
-                campo_cod = modal_fam.locator('input[name*="codigo_familiar"], input[id*="codigo_familiar"]').first
-
-            if campo_cod.is_visible():
-                campo_cod.click()
-                campo_cod.press("Control+A")
-                campo_cod.press("Backspace")
-                campo_cod.type(cod_limpo, delay=30)
-                page.wait_for_timeout(200)
-
-        # 7.2. Telefone Residencial
-        campo_tel = modal_fam.locator('text="Telefone Residencial"').locator('xpath=following-sibling::input | ../following-sibling::*//input | following::input[1]').first
-        if not campo_tel.is_visible():
-            campo_tel = modal_fam.locator('input[name*="telefone"], input[id*="telefone"]').first
-
-        if campo_tel.is_visible():
-            campo_tel.click()
-            campo_tel.press("Control+A")
-            campo_tel.press("Backspace")
-            page.wait_for_timeout(200)
-
-        # 7.3. Forma de Acesso: "Por demanda espontânea"
-        select_demanda = modal_fam.locator('select:has-text("demanda"), select[name*="demanda"], select[id*="demanda"]').first
-        if not select_demanda.is_visible():
-            select_demanda = modal_fam.locator('text="De que forma a família"').locator('xpath=following::select[1]').first
-
-        if select_demanda.is_visible():
-            select_demanda.focus()
-            try:
-                select_demanda.select_option(label="Por demanda espontânea")
-            except Exception:
-                select_demanda.select_option(label=re.compile(r"demanda espontânea", re.IGNORECASE))
-            select_demanda.dispatch_event("change")
-            select_demanda.dispatch_event("input")
-            page.wait_for_timeout(300)
-
-        # 7.4. Confirmar 'OK' na janela modal
-        btn_ok_fam = modal_fam.locator('button:visible:has-text("OK"), .ui-dialog-buttonpane button:has-text("OK")').first
-        if btn_ok_fam.is_visible():
-            btn_ok_fam.click()
-            page.wait_for_timeout(1500)
-
-    # 8. Encerrar Atendimento e marcar Cadastramento/Atualização
-    btn_encerrar = page.locator('a:has-text("Encerrar atendimento"), button:has-text("Encerrar atendimento")').first
-    btn_encerrar.wait_for(state="visible", timeout=10000)
-    btn_encerrar.click()
-    page.wait_for_timeout(1000)
-
-    modal_encerrar = page.locator('.ui-dialog, div:has-text("Encerrar Atendimento")').filter(has_text="Tipos").last
-    modal_encerrar.wait_for(state="visible", timeout=7000)
-
-    opcao_atualizacao = modal_encerrar.locator('text="Cadastramento/Atualização Cadastral na GESUAS"')
-    if opcao_atualizacao.is_visible():
-        chk = opcao_atualizacao.locator('xpath=preceding-sibling::input | input').first
-        if not chk.is_checked():
-            opcao_atualizacao.click()
-        page.wait_for_timeout(300)
-
-    btn_ok_encerrar = modal_encerrar.locator('button:has-text("OK"), a:has-text("OK")').first
-    btn_ok_encerrar.click()
-    page.wait_for_timeout(1500)
-
-    # 9. Retorno ao painel de busca pelo botão '<'
-    btn_seta_voltar = page.locator('button:has-text("Agendar Atendimento"), a:has-text("Agendar Atendimento")').locator('xpath=preceding-sibling::*[1]').first
-    if btn_seta_voltar.is_visible():
-        btn_seta_voltar.click()
-    page.wait_for_timeout(1000)
+    if eh_visita_rf:
+        obs_membro = f" (Visita Domiciliar lançada){obs_membro}".strip()
 
     return obs_membro
 
@@ -461,7 +729,7 @@ def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, 
 def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_login_pronto, fila, cancel_event):
     """Orquestrador principal chamado pela interface SuiteGesuasApp."""
     try:
-        fila.put({"tipo": "log", "msg": f"[MOTOR GESUAS_BOT]: Iniciando rotina de lançamentos.\n"})
+        fila.put({"tipo": "log", "msg": f"[MOTOR GESUAS_BOT]: Iniciando rotina de lançamentos com suporte a Visita Domiciliar.\n"})
         fila.put({"tipo": "log", "msg": f" -> Planilha: {os.path.basename(caminho_planilha)} [Aba: {nome_aba}]\n"})
 
         pasta_planilhas = os.path.join(pasta_destino_base, "PLANILHAS_EXCEL")
@@ -487,12 +755,12 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
         col_data = next((c for c in df.columns if "DATA" in str(c).upper()), "DATA")
         col_hora = next((c for c in df.columns if "HORA" in str(c).upper()), "HORAS")
         col_gesuas = next((c for c in df.columns if "GESUAS" in str(c).upper()), "GESUAS")
-        col_obs_orig = next((c for c in df.columns if "OBS" in str(c).upper() or "VISITA" in str(c).upper()), None)
+        col_obs_orig = next((c for c in df.columns if "OBS" in str(c).upper() or "VISITA" in str(c).upper()), "OBS")
 
         total_linhas = len(df)
         fila.put({"tipo": "log", "msg": f"[PLANILHA] {total_linhas} linhas mapeadas na aba {nome_aba}.\n"})
 
-        fila.put({"tipo": "log", "msg": "[EDGE] Inicializando Microsoft Edge na porta 9222...\n"})
+        fila.put({"tipo": "log", "msg": "[EDGE] Conectando ao Microsoft Edge na porta 9222...\n"})
         iniciar_edge()
 
         fila.put({
@@ -543,7 +811,7 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                 data_atend = formatar_data_segura(linha.get(col_data, ''))
                 hora_atend = formatar_hora_segura(linha.get(col_hora, ''))
                 
-                obs_planilha = str(linha.get(col_obs_orig, '')).strip() if col_obs_orig else ""
+                obs_planilha = str(linha.get(col_obs_orig, '')).strip() if col_obs_orig in df.columns else ""
                 if obs_planilha.lower() in ['nan', 'none']:
                     obs_planilha = ""
 
@@ -556,11 +824,13 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                 status_gesuas_atual = str(linha.get(col_gesuas, '')).strip().upper()
 
                 fila.put({"tipo": "log", "msg": f"\n[{num_linha}/{total_linhas}] Linha {num_linha}: {nome_municipe}\n"})
-                fila.put({"tipo": "log", "msg": f" -> CPF: {cpf_raw} | Serviço: {servico} | Data: {data_hora_str}\n"})
+                fila.put({"tipo": "log", "msg": f" -> CPF: {cpf_raw} | Serviço: {servico} | Obs: {obs_planilha} | Data: {data_hora_str}\n"})
 
-                # REGRA 1: Já marcado com OK
-                if "OK" in status_gesuas_atual:
-                    fila.put({"tipo": "log", "msg": " -> [PULADO]: Atendimento já sinalizado como 'OK' na planilha.\n"})
+                eh_visita_planilha = eh_servico_visita_domiciliar(servico, obs_planilha)
+
+                # REGRA 1: Pular apenas se já estiver OK E NÃO for visita domiciliar
+                if "OK" in status_gesuas_atual and not eh_visita_planilha:
+                    fila.put({"tipo": "log", "msg": " -> [PULADO]: Atendimento comum já sinalizado como 'OK' na planilha.\n"})
                     resultados_robo.append({
                         "Linha": num_linha,
                         "Nome": nome_municipe,
@@ -575,9 +845,30 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                     notificar_progresso()
                     continue
 
-                # REGRA 2: CONSULTA (não gera atendimento)
+                # REGRA 2: CONSULTA (Saneamento exclusivo em Editar Família se for RF)
                 if "CONSULTA" in servico:
-                    fila.put({"tipo": "log", "msg": " -> [CONSULTA]: Apenas verificação cadastral. Não gera atendimento.\n"})
+                    cod_limpo = re.sub(r'\D', '', str(cod_fam_planilha)).strip()
+                    diag_consulta = "Consulta (Sem alteração de cadastro)"
+
+                    if len(cod_limpo) == 11:
+                        achou = buscar_municipe(page, nome_municipe, cpf_raw, fila)
+                        if achou:
+                            status_acesso = verificar_pessoa_desligada_ou_acessar_familia(page, nome_municipe, fila)
+                            if status_acesso != "DESLIGADA":
+                                eh_rf, nome_rf_tela = verificar_titularidade_rf(page, cpf_raw, nome_municipe)
+                                if eh_rf:
+                                    fila.put({"tipo": "log", "msg": f" -> [CONSULTA / RF]: Munícipe é o RF ({nome_rf_tela}). Saneando cadastro...\n"})
+                                    diag_consulta = sanear_consulta_ultimo_atendimento(page, cod_limpo, fila)
+                                else:
+                                    fila.put({"tipo": "log", "msg": f" -> [CONSULTA / NÃO-RF]: Munícipe não é o RF ({nome_rf_tela}). Código não alterado.\n"})
+                                    retornar_para_busca(page)
+                                    diag_consulta = "Consulta mantida (Munícipe dependente)"
+                            else:
+                                retornar_para_busca(page)
+                                diag_consulta = "Consulta - Munícipe desligado"
+                        else:
+                            diag_consulta = "Consulta - Munícipe não localizado no GESUAS"
+
                     df.at[idx, col_gesuas] = "OK (CONSULTA)"
                     alteracoes_feitas = True
                     resultados_robo.append({
@@ -589,7 +880,7 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                         "Serviço": "CONSULTA",
                         "Cód. Familiar Planilha": cod_fam_planilha,
                         "Status Robô": "CONSULTA",
-                        "Diagnóstico": obs_planilha if obs_planilha else "Informativo - sem alteração de cadastro"
+                        "Diagnóstico": diag_consulta
                     })
                     notificar_progresso()
                     continue
@@ -630,11 +921,22 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                     notificar_progresso()
                     continue
 
-                # 3. Verificação de duplicidade em 'Editar um Atendimento'
-                ja_tem = checar_duplicidade_atendimento(page, data_hora_str, data_atend, hora_atend, fila)
+                # 3. Identificação de Visita e Titularidade de RF
+                eh_rf, nome_rf_tela = verificar_titularidade_rf(page, cpf_raw, nome_municipe)
+                eh_visita_rf = eh_visita_planilha and eh_rf
+
+                if eh_visita_planilha:
+                    if eh_rf:
+                        fila.put({"tipo": "log", "msg": f" -> [CRITÉRIO VISITA]: Munícipe é o RF ({nome_municipe}). Rota de Visita Domiciliar ativada.\n"})
+                    else:
+                        fila.put({"tipo": "log", "msg": f" -> [AVISO VISITA]: Munícipe NÃO é o RF (RF: {nome_rf_tela}). Visita restrita ao titular.\n"})
+
+                # 4. Verificação de duplicidade / conferência de visita no GESUAS
+                ja_tem, diag_visita = checar_duplicidade_e_adequar_visita(page, data_hora_str, data_atend, hora_atend, eh_visita_rf, cod_fam_planilha, fila)
                 if ja_tem:
                     df.at[idx, col_gesuas] = "OK"
                     alteracoes_feitas = True
+                    diag_final = diag_visita if diag_visita else (obs_planilha if obs_planilha else f"Atendimento existente em {data_hora_str} (Auditado)")
                     resultados_robo.append({
                         "Linha": num_linha,
                         "Nome": nome_municipe,
@@ -643,19 +945,19 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                         "Hora": hora_atend,
                         "Serviço": servico,
                         "Cód. Familiar Planilha": cod_fam_planilha,
-                        "Status Robô": "JÁ CADASTRADO",
-                        "Diagnóstico": obs_planilha if obs_planilha else f"Atendimento já existente em {data_hora_str}"
+                        "Status Robô": "AUDITADO",
+                        "Diagnóstico": diag_final
                     })
                     notificar_progresso()
                     continue
 
-                # 4. Lançamento e encerramento
+                # 5. Lançamento e encerramento de atendimento novo
                 fila.put({"tipo": "log", "msg": f" -> [LANÇAMENTO]: A registrar atendimento de {servico} ({data_hora_str})...\n"})
-                obs_membro = registrar_atendimento_completo(page, data_hora_str, nome_municipe, cod_fam_planilha, fila)
+                obs_membro = registrar_atendimento_completo(page, data_hora_str, nome_municipe, cod_fam_planilha, servico, obs_planilha, cpf_raw, fila)
 
                 df.at[idx, col_gesuas] = "OK"
                 alteracoes_feitas = True
-                fila.put({"tipo": "log", "msg": f" -> [SUCESSO]: Atendimento registrado e encerrado no GESUAS com sucesso!\n"})
+                fila.put({"tipo": "log", "msg": f" -> [SUCESSO]: Atendimento registrado e encerrado no GESUAS com êxito!\n"})
 
                 diag_final = f"{obs_planilha} {obs_membro}".strip() if (obs_planilha or obs_membro) else "Atendimento lançado no GESUAS"
 
