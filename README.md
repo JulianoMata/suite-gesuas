@@ -17,7 +17,8 @@ A **Suite GESUAS** é uma solução computacional desktop construída para integ
 O ecossistema resolve gargalos crônicos do fluxo técnico do CRAS Sul:
 
 * **Conferência em lote de conformidade cadastral:** Cruzamento automatizado de composições familiares entre os PDFs digitalizados e o banco do GESUAS antes de qualquer manipulação de dados.
-* **Lançamento assistido de atualizações e atendimentos:** Leitura direta de planilhas de trabalho com validação de duplicidade histórica, eliminação de intervenções manuais repetitivas e saneamento cadastral de campos fundamentais.
+* **Lançamento assistido de atualizações, inclusões e visitas:** Leitura direta de planilhas de trabalho com validação de duplicidade histórica, eliminação de intervenções manuais repetitivas e saneamento cadastral de campos fundamentais.
+* **Saneamento ativo em atendimentos de Consulta:** Identificação de divergência ou ausência de Código Familiar no GESUAS com reabertura retroativa do último atendimento para sincronização do código e encerramento normatizado para o Responsável Familiar (RF).
 * **Preservação de integridade e auditoria:** Emissão de relatórios analíticos em PDF e Excel, geração de cópias sincronizadas e proteção absoluta da planilha original de trabalho.
 
 ---
@@ -39,7 +40,8 @@ Para assegurar a governança dos dados e a conformidade com as diretrizes do Min
   │ 2. AUTOMAÇÃO DE LANÇAMENTOS (Módulo 2: Planilha Excel) │
   │    - Disparada após saneamento das divergências        │
   │    - Registra o atendimento com carimbo de tempo       │
-  │    - Atualiza Código Familiar e fecha o atendimento    │
+  │    - Trata Visita Domiciliar vs. Demanda Espontânea    │
+  │    - Sincroniza Código Familiar e encerra com a 3ª op. │
   └────────────────────────────────────────────────────────┘
 ```
 
@@ -49,23 +51,62 @@ Para assegurar a governança dos dados e a conformidade com as diretrizes do Min
 
 ## 🔒 Escopo de Preenchimento e Delimitação Cadastral
 
-Com foco na integridade das informações socioassistenciais e na conformidade com a LGPD, a versão atual do sistema adota um **escopo restrito de intervenção**. O robô **não** substitui a entrevista social nem altera variáveis complexas do formulário do Cadastro Único:
+Com foco na integridade das informações socioassistenciais e na conformidade com a LGPD, o sistema adota um **escopo rigoroso e normatizado de intervenção**:
 
 ### ✅ O que a Suite GESUAS processa e atualiza
 
 * **Data e Horário do Atendimento:** Preenchimento estrito com carimbo fidedigno extraído da planilha de trabalho.
-* **Vínculo de Atendimento:** Registro normatizado como *"Sem vínculo de serviço"* e encerramento com *"Cadastramento/Atualização Cadastral na GESUAS"*.
-* **Código Familiar:** Sanitização e sincronização do identificador numérico de 11 dígitos da família.
-* **Forma de Acesso da Família:** Seleção compulsória da opção *"Por demanda espontânea"*.
-* **Limpeza de Telefone Residencial:** Remoção de números legados corrompidos ou descontinuados para evitar contato equivocado.
+* **Vínculo de Atendimento:** Registro padronizado como *"Sem vínculo de serviço"*.
+* **Marcação de Visita Domiciliar:** Detecção semântica unificada (nas colunas `SERVICO` e `OBS`) com marcação compulsória de **"Visita Domiciliar"** e **"Busca Ativa"** no formulário de atendimento quando realizada com o Responsável Familiar (RF).
+* **Forma de Acesso da Família:** 
+  * Seleciona compulsoriamente *"Busca Ativa realizada pela equipe da unidade"* caso haja visita domiciliar com o RF.
+  * Seleciona *"Por demanda espontânea"* para os demais atendimentos de balcão ou consultas.
+* **Código Familiar:** Extração estrita via expressão regular de 11 dígitos após o rótulo do sistema e sanitização de pontuações, gravando o código atualizado da planilha.
+* **Limpeza de Telefones Legados:** Remoção completa de números residenciais/celulares legados desatualizados em *Editar família* para evitar falhas de contato operacional.
+* **Encerramento Cirúrgico:** Desmarcação atômica por índice de todas as opções indevidas (como *"Acompanhamento familiar particularizado"*) e seleção exclusiva da 3ª opção: **"Cadastramento/Atualização Cadastral na GESUAS"**.
 
 ### ⛔ Campos NÃO modificados pela automação (Intervenção Humana Exclusiva)
 
 * **Condição de Deficiência (PcD):** Informações sobre existência de deficiência nos membros familiares, laudos ou necessidades especiais permanecem intocadas, exigindo comprovação documental e declaração assistida.
-* **Endereço e Local de Residência:** Preservados intactos para não descaracterizar territórios de abrangência ou bairros.
+* **Endereço e Local de Residência:** Preservados intactos para não descaracterizar territórios de abrangência ou microáreas de PSF.
 * **Renda e Informações Financeiras:** Nenhum cálculo de renda per capita ou remuneração de membros é alterado.
 * **Escolaridade e Ocupação:** Variáveis pedagógicas e de qualificação profissional mantêm-se exatamente como digitadas pelos operadores técnicos.
-* **Contatos Pessoais / Celulares:** Informações detalhadas de contato e e-mail permanecem sob responsabilidade das entrevistas sociais presenciais.
+* **Composição e Parentesco:** O robô não altera vínculos de parentesco prévios de famílias estruturadas no sistema.
+
+---
+
+## ⚙️ Regras de Negócio e Funcionalidades Centrais
+
+### 1. Conexão Acoplada via CDP (Chrome DevTools Protocol)
+
+* **Login pelo Operador:** O sistema inicializa uma sessão do Microsoft Edge conectada via porta `9222` (`--remote-debugging-port=9222`), permitindo que o operador realize seu login convencional no GESUAS manualmente antes de liberar a execução do robô.
+* **Resiliência e Desacoplamento:** Elimina a necessidade de embutir credenciais em código e dispensa a criação de perfis descartáveis a cada bateria de testes.
+* **Prontidão de Segurança:** A arquitetura desacoplada via CDP está estruturalmente preparada para ambientes com duplo fator (MFA) ou Gov.br.
+
+### 2. Tratamento Especial de Visita Domiciliar e Edição Retroativa
+
+* O sistema verifica termos como `VISITA`, `DOMICILI`, `DOMICILIO` ou `ENTREVISTA DOMICILIAR` tanto na coluna de serviço quanto na coluna de observações (`OBS`).
+* **Se o atendimento já constar no histórico:** O robô abre a modal de histórico, clica em *Editar* na linha correspondente, marca os checkboxes de *Visita Domiciliar* e *Busca Ativa*, confirma via botão *Iniciar*, ajusta a Forma de Acesso e Código Familiar em *Editar família* e encerra o atendimento selecionando exclusivamente a opção de atualização cadastral.
+
+### 3. Saneamento Inteligente em Atendimentos de CONSULTA
+
+* Se o munícipe for o **Responsável Familiar (RF)** e houver Código Familiar válido (11 dígitos) na planilha:
+  * O robô extrai o código de 11 dígitos após o rótulo do prontuário em tela.
+  * **Se faltar ou divergir:** Acessa *Editar um Atendimento*, reabre o atendimento mais recente via *Iniciar*, entra em *Editar família*, atualiza o código, limpa telefones, define Demanda Espontânea e finaliza no botão *Encerrar atendimento* com a 3ª opção.
+  * Se o código já estiver correto ou se a família não possuir atendimentos prévios, o sistema pula sem intervenções desnecessárias.
+
+### 4. Tratamento Dinâmico de Membros Não-RF
+
+* Caso a pessoa atendida na planilha não seja o Responsável Familiar (RF):
+  1. Identifica a pessoa de referência exibida em tela;
+  2. Desmarca os membros familiares anteriores via script DOM;
+  3. Marca exclusivamente o membro atendido na lista de *Pessoas atendidas*;
+  4. Mantém a Forma de Acesso e a estrutura familiar principal protegidas de alterações indevidas.
+
+### 5. Tratamento de Tipos e Nulos (Blindagem contra `NaT`)
+
+* Parsing seguro de células de data e hora do Excel via `pd.isna()`.
+* Evita falhas críticas de execução do tipo `NaTType does not support strftime` em linhas vazias ou no encerramento da planilha.
 
 ---
 
@@ -82,8 +123,6 @@ A interface foi projetada com o framework **CustomTkinter** em modo escuro nativ
 
 ## 📂 Estrutura do Repositório
 
-O projeto adota uma arquitetura modular desacoplada:
-
 ```text
 SUITE_GESUAS/
 │
@@ -98,9 +137,9 @@ SUITE_GESUAS/
 │   │
 │   ├── Automacao/                  # Módulo 2: Robô de Lançamentos (Planilhas Excel)
 │   │   ├── __init__.py             # Inicializador do pacote
-│   │   ├── automacao_engine.py     # Orquestrador da automação via Playwright CDP
+│   │   ├── automacao_engine.py     # Motor operacional principal via Playwright CDP
 │   │   ├── config.py               # Definições de portas, perfis e parâmetros locais
-│   │   ├── gesuas_bot.py           # Procedimentos de manipulação do DOM e formulários
+│   │   ├── gesuas_bot.py           # Procedimentos CLI e manipulação de formulários
 │   │   ├── notificacoes.py         # Tratamento de diálogos e alertas visuais
 │   │   └── relatorio_pdf.py        # Relatório de atendimentos com legenda cromática
 │   │
@@ -123,59 +162,13 @@ SUITE_GESUAS/
 
 ## 🗂️ Diretórios Gerados Dinamicamente em Tempo de Execução
 
-As pastas de armazenamento de resultados **não integram o versionamento estático** do Git (sendo filtradas via `.gitignore` para resguardo de dados pessoais conforme a LGPD). Elas são criadas automaticamente pela aplicação dentro do diretório de destino apontado pelo operador:
+As pastas de armazenamento de resultados **não integram o versionamento estático** do Git (sendo filtradas via `.gitignore` para resguardo de dados pessoais conforme a LGPD):
 
 | Diretório Gerado | Finalidade Operacional |
 | :--- | :--- |
 | `PLANILHAS_EXCEL/` | Armazena a cópia sincronizada da planilha com status `OK` preenchido (`CADASTRO_ATUALIZADO_[MÊS]_[TIMESTAMP].xlsx`) e o relatório analítico em formato de planilha. A planilha de entrada original nunca é sobrescrita. |
 | `RELATORIOS_PDF/` | Recebe os relatórios oficiais formatados em PDF (paisagem), contendo métricas executivas consolidadas, totalizadores por tipo de serviço e estilização cromática. |
 | `CHECKPOINTS/` | Registra arquivos temporários (`.json`) com o progresso do lote auditado. Permite pausar e retomar lotes volumosos de onde pararam ou reiniciar do início sob demanda. |
-
----
-
-## ⚙️ Regras de Negócio e Funcionalidades Centrais
-
-### 1. Conexão Acoplada via CDP (Chrome DevTools Protocol)
-
-* **Login pelo Operador:** O sistema inicializa uma sessão do Microsoft Edge conectada via porta `9222` (`--remote-debugging-port=9222`), permitindo que o operador realize seu login convencional no GESUAS manualmente antes de liberar a execução do robô.
-* **Resiliência e Desacoplamento:** Elimina a necessidade de embutir credenciais ou senhas em arquivos de configuração e dispensa a criação de perfis descartáveis a cada bateria de testes.
-* **Prontidão de Segurança:** A arquitetura desacoplada via CDP já está estruturalmente preparada para ambientes que exijam futuramente autenticação em dois fatores (MFA) ou certificados digitais Gov.br, sem requerer mudanças na lógica do motor Playwright.
-
-### 2. Validação Anti-Duplicidade via DOM Assíncrono
-
-* Avalia diretamente o conteúdo renderizado na modal `Editar um Atendimento` via scripts JavaScript injetados no DOM.
-* Se a data e o horário já constarem lançados no histórico familiar do GESUAS, o registro é confirmado com `OK`, a janela é fechada no botão de saída e a rotina avança para o próximo munícipe sem gerar duplicidades.
-
-### 3. Tratamento Dinâmico de Membros Não-RF
-
-* Caso a pessoa atendida na planilha não seja o Responsável Familiar (RF):
-  1. Identifica a pessoa de referência exibida em tela;
-  2. Preserva a seleção do operador técnico municipal;
-  3. Desmarca os membros familiares anteriores via script DOM;
-  4. Marca exclusivamente a pessoa atendida na lista de *Pessoas atendidas*.
-
-### 4. Saneamento Cadastral em 'Editar Família'
-
-* **Código Familiar:** Sanitiza pontuações e hifens, gravando apenas caracteres numéricos.
-* **Telefone Residencial:** Limpa números legados desatualizados com seleção total e remoção.
-* **Forma de Acesso:** Vincula compulsoriamente a opção `"Por demanda espontânea"`.
-
-### 5. Tratamento de Tipos e Nulos (Blindagem contra `NaT`)
-
-* Parsing seguro de células de data e hora do Excel via `pd.isna()`.
-* Evita falhas críticas de execução do tipo `NaTType does not support strftime` em linhas vazias ou no encerramento da planilha.
-
----
-
-## 🗺️ Roadmap de Atualizações Futuras
-
-O projeto encontra-se em desenvolvimento contínuo, prevendo as seguintes expansões para versões subsequentes:
-
-* [ ] **Módulo de Atualização Sociodemográfica Plena:** Rotina assistida para preenchimento de endereço, telefone atualizado e contatos de referência a partir de planilhas higienizadas.
-* [ ] **Identificação e Validação de PcD / BPC:** Cruzamento automático do campo de deficiência com os cadastros ativos de BPC Deficiente.
-* [ ] **Auditoria de Renda e Divergências Financeiras:** Comparador entre renda declarada no CadÚnico vs. lançamentos de benefícios sociais no prontuário.
-* [ ] **Dashboard Integrado de Vigilância Socioassistencial:** Painel analítico de famílias unipessoais com/sem visita domiciliar, cobertura de BPC (Idoso/PcD) e averiguações do Programa Bolsa Família (PBF).
-* [ ] **Disparo Automatizado de Alertas de Desligamento:** Identificação proativa de munícipes com pendência de retorno para manutenção do cadastro ativo.
 
 ---
 
