@@ -1159,3 +1159,4 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
     except Exception as erro:
         fila.put({"tipo": "log", "msg": f"\n[ERRO CRÍTICO NA AUTOMAÇÃO]: {str(erro)}\n"})
         fila.put({"tipo": "fim_robo", "sucesso": False})
+        
