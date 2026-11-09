@@ -8,22 +8,31 @@ CARGO: Agente Administrativo / Operador do Cadastro Único - CRAS Sul (Campo Bel
 FORMAÇÃO: Bacharel em Ciência de Dados e Inteligência Artificial | Tecnólogo em Gestão de TI
 DESCRIÇÃO: Constrói dinamicamente o documento PDF paisagem via ReportLab contendo
             cabeçalho executivo, legenda cromática compacta no topo, totalizadores
-            e tabela de auditoria com estilos tipográficos específicos (Visita em
-            itálico tachado e Unipessoal em negrito).
+            e tabela de auditoria com estilos tipográficos específicos e blindagem
+            cromática com normalização de acentos (eliminando linhas brancas).
 ========================================================================================
 """
 
 import os
+import unicodedata
+import re
 from datetime import datetime
 from reportlab.lib.pagesizes import letter, landscape
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-# Constantes institucionais do operador
 AUTOR_NOME = "Juliano França da Mata"
 AUTOR_CARGO = "Agente Administrativo / Operador do Cadastro Único"
 AUTOR_QUALIF = "Bacharel em Ciência de Dados e IA | Tecnólogo em Gestão de TI"
+
+
+def normalizar_termo(texto: str) -> str:
+    """Remove acentuações e retorna em caixa alta para correspondência segura."""
+    if not texto:
+        return ""
+    txt = unicodedata.normalize('NFKD', str(texto)).encode('ASCII', 'ignore').decode('utf-8')
+    return re.sub(r'\s+', ' ', txt).strip().upper()
 
 
 def formatar_observacao_estilizada(obs_texto, estilo_paragrafo):
@@ -58,7 +67,6 @@ def gerar_relatorio_pdf(relatorio_dados: list, nome_aba: str, caminho_saida_pdf:
         print("[PDF] Nenhum registro processado para emissão de relatório.")
         return None
 
-    # Se o caminho de saída não for informado, grava no diretório padrão local
     if not caminho_saida_pdf:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         caminho_saida_pdf = os.path.join(os.getcwd(), f"Relatorio_GESUAS_{nome_aba}_{timestamp}.pdf")
@@ -95,10 +103,10 @@ def gerar_relatorio_pdf(relatorio_dados: list, nome_aba: str, caminho_saida_pdf:
     elementos = []
 
     # Totalizadores por Ação
-    total_atualizacoes = sum(1 for r in relatorio_dados if "ATUALIZA" in str(r.get("TipoAcao", r.get("Serviço", ""))).upper())
-    total_inclusoes = sum(1 for r in relatorio_dados if "INCLUSA" in str(r.get("TipoAcao", r.get("Serviço", ""))).upper())
-    total_consultas = sum(1 for r in relatorio_dados if "CONSULTA" in str(r.get("TipoAcao", r.get("Serviço", ""))).upper())
-    total_exclusoes = sum(1 for r in relatorio_dados if "EXCLUSA" in str(r.get("TipoAcao", r.get("Serviço", ""))).upper())
+    total_atualizacoes = sum(1 for r in relatorio_dados if "ATUALIZA" in normalizar_termo(r.get("TipoAcao", r.get("Serviço", ""))))
+    total_inclusoes = sum(1 for r in relatorio_dados if "INCLUSA" in normalizar_termo(r.get("TipoAcao", r.get("Serviço", ""))))
+    total_consultas = sum(1 for r in relatorio_dados if "CONSULTA" in normalizar_termo(r.get("TipoAcao", r.get("Serviço", ""))))
+    total_exclusoes = sum(1 for r in relatorio_dados if "EXCLUSA" in normalizar_termo(r.get("TipoAcao", r.get("Serviço", ""))))
     total_geral = len(relatorio_dados)
 
     titulo = Paragraph(
@@ -171,26 +179,29 @@ def gerar_relatorio_pdf(relatorio_dados: list, nome_aba: str, caminho_saida_pdf:
     ]
 
     for idx, r in enumerate(relatorio_dados, start=1):
-        st = str(r.get("Status Robô", r.get("Status", ""))).upper()
-        tipo_acao = str(r.get("Serviço", r.get("TipoAcao", "ATUALIZAÇÃO"))).upper()
+        st_raw = str(r.get("Status Robô", r.get("Status", "")))
+        tipo_acao_raw = str(r.get("Serviço", r.get("TipoAcao", "ATUALIZAÇÃO")))
         obs_raw = str(r.get("Diagnóstico", r.get("Obs", ""))).strip()
         data_hora = f"{r.get('Data', '')} {r.get('Hora', '')}".strip()
 
+        st_norm = normalizar_termo(st_raw)
+        acao_norm = normalizar_termo(tipo_acao_raw)
+
         # Normalização de exibição de status
-        if "CONSULTA" in st:
+        if "CONSULTA" in st_norm:
             status_exibicao = "REGISTRADO"
-        elif "CONCLUÍDO" in st or "REALIZADO" in st or "SUCESSO" in st:
+        elif "CONCLUIDO" in st_norm or "REALIZADO" in st_norm or "SUCESSO" in st_norm:
             status_exibicao = "SUCESSO"
-        elif "CONFIRMADO" in st or "CADASTRADO" in st or "DUPLICIDADE" in st:
+        elif "CONFIRMADO" in st_norm or "CADASTRADO" in st_norm or "DUPLICIDADE" in st_norm or "AUDITADO" in st_norm:
             status_exibicao = "JÁ CADASTRADO"
-        elif "ERRO" in st or "NÃO LOCALIZADO" in st:
+        elif "ERRO" in st_norm or "NAO LOCALIZADO" in st_norm:
             status_exibicao = "NÃO LOCALIZADO"
-        elif "DESLIGADA" in st:
+        elif "DESLIGADA" in st_norm:
             status_exibicao = "DESLIGADA"
-        elif "EXCLUS" in st:
+        elif "EXCLUS" in st_norm:
             status_exibicao = "PENDENTE"
         else:
-            status_exibicao = st[:14]
+            status_exibicao = st_raw[:14] if st_raw else "PROCESSADO"
 
         celula_obs = formatar_observacao_estilizada(obs_raw, obs_cell_style)
 
@@ -199,22 +210,25 @@ def gerar_relatorio_pdf(relatorio_dados: list, nome_aba: str, caminho_saida_pdf:
             str(r.get("Nome", ""))[:24],
             str(r.get("CPF", "")),
             data_hora,
-            tipo_acao,
+            tipo_acao_raw.strip().upper(),
             status_exibicao,
             celula_obs
         ])
 
-        # Cores contextuais por linha
-        if "NÃO LOCALIZADO" in status_exibicao or "ERRO" in status_exibicao or "DESLIGADA" in status_exibicao:
+        # Cores contextuais blindadas contra acentuação
+        if any(termo in normalizar_termo(status_exibicao) for termo in ["NAO LOCALIZADO", "ERRO", "DESLIGADA"]):
             estilo_tabela.append(('BACKGROUND', (0, idx), (-1, idx), colors.HexColor("#FFE0B2")))  # Laranja
-        elif "ATUALIZA" in tipo_acao:
+        elif "ATUALIZA" in acao_norm:
             estilo_tabela.append(('BACKGROUND', (0, idx), (-1, idx), colors.HexColor("#D4EDDA")))  # Verde
-        elif "CONSULTA" in tipo_acao:
+        elif "CONSULTA" in acao_norm:
             estilo_tabela.append(('BACKGROUND', (0, idx), (-1, idx), colors.HexColor("#FFF2CC")))  # Amarelo
-        elif "INCLUSA" in tipo_acao:
+        elif "INCLUSA" in acao_norm:
             estilo_tabela.append(('BACKGROUND', (0, idx), (-1, idx), colors.HexColor("#F8D7DA")))  # Vermelho
-        elif "EXCLUSA" in tipo_acao:
+        elif "EXCLUSA" in acao_norm:
             estilo_tabela.append(('BACKGROUND', (0, idx), (-1, idx), colors.HexColor("#D1ECF1")))  # Azul
+        else:
+            # Fallback seguro para qualquer outro serviço não catalogado (verde suave)
+            estilo_tabela.append(('BACKGROUND', (0, idx), (-1, idx), colors.HexColor("#EBF5FB")))
 
     t = Table(dados_tabela, colWidths=[30, 175, 80, 90, 80, 85, 200])
     t.setStyle(TableStyle(estilo_tabela))

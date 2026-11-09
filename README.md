@@ -14,9 +14,10 @@ A **Suite GESUAS** é uma solução computacional desktop construída para integ
 O ecossistema resolve gargalos crônicos do fluxo técnico do CRAS Sul:
 
 * **Conferência em lote de conformidade cadastral:** Cruzamento automatizado de composições familiares entre os PDFs digitalizados e o banco do GESUAS antes de qualquer manipulação de dados.
-* **Lançamento assistido de atualizações, inclusões e visitas:** Leitura direta de planilhas de trabalho com validação de duplicidade histórica, eliminação de intervenções manuais repetitivas e saneamento cadastral de campos fundamentais.
-* **Saneamento ativo em atendimentos de Consulta:** Identificação de divergência ou ausência de Código Familiar no GESUAS com reabertura retroativa do último atendimento para sincronização do código e encerramento normatizado para o Responsável Familiar (RF).
-* **Preservação de integridade e auditoria:** Emissão de relatórios analíticos em PDF e Excel, geração de cópias sincronizadas e proteção absoluta da planilha original de trabalho.
+* **Auditoria ativa compulsória e lançamentos:** Não realiza *bypass* cego de registros marcados como `"OK"` na planilha; abre ativamente o GESUAS, inspeciona o histórico de atendimentos e valida ou regulariza a existência fidedigna do registro.
+* **Saneamento compulsório de Código Familiar em branco:** Inserção automática do Código Familiar de 11 dígitos da planilha quando ausente no prontuário do GESUAS e o munícipe for o Responsável Familiar (RF), respeitando a política de não-regressão.
+* **Saneamento ativo em atendimentos de Consulta:** Identificação de divergência ou ausência de Código Familiar no GESUAS com reabertura retroativa do último atendimento para sincronização do código e encerramento normatizado para o RF.
+* **Preservação de integridade e auditoria:** Emissão de relatórios analíticos em PDF e Excel com normalização cromática e rastreabilidade explícita de inconsistências e falhas operacionais.
 
 ---
 
@@ -35,10 +36,10 @@ Para assegurar a governança dos dados e a conformidade com as diretrizes do Min
                               ▼
   ┌────────────────────────────────────────────────────────┐
   │ 2. AUTOMAÇÃO DE LANÇAMENTOS (Módulo 2: Planilha Excel) │
-  │    - Disparada após saneamento das divergências        │
-  │    - Registra o atendimento com carimbo de tempo       │
-  │    - Trata Visita Domiciliar vs. Demanda Espontânea    │
-  │    - Sincroniza Código Familiar e encerra com a 3ª op. │
+  │    - Varredura ativa total (sem ignorar linhas 'OK')   │
+  │    - Audita histórico prévio e previne duplicidade     │
+  │    - Lança atendimento e saneia código faltante em RF  │
+  │    - Sincroniza Código Familiar e encerra na 3ª opção  │
   └────────────────────────────────────────────────────────┘
 ```
 
@@ -52,13 +53,16 @@ Com foco na integridade das informações socioassistenciais e na conformidade c
 
 ### ✅ O que a Suite GESUAS processa e atualiza
 
+* **Auditoria de Histórico sem Bypass:** Toda linha da planilha é aberta e inspecionada no GESUAS, mesmo que já conste como `"OK"` na planilha de trabalho, garantindo que o histórico do prontuário realmente contenha o lançamento.
 * **Data e Horário do Atendimento:** Preenchimento estrito com carimbo fidedigno extraído da planilha de trabalho.
 * **Vínculo de Atendimento:** Registro padronizado como *"Sem vínculo de serviço"*.
 * **Marcação de Visita Domiciliar:** Detecção semântica unificada (nas colunas `SERVICO` e `OBS`) com marcação compulsória de **"Visita Domiciliar"** e **"Busca Ativa"** no formulário de atendimento quando realizada com o Responsável Familiar (RF).
 * **Forma de Acesso da Família:**
   * Seleciona compulsoriamente *"Busca Ativa realizada pela equipe da unidade"* caso haja visita domiciliar com o RF.
   * Seleciona *"Por demanda espontânea"* para os demais atendimentos de balcão ou consultas.
-* **Código Familiar e Não-Regressão:** Extração estrita via expressão regular de 11 dígitos. Em lotes retroativos, preserva o código mais recente já existente na tela do GESUAS e preenche automaticamente quando o prontuário estiver em branco.
+* **Saneamento e Não-Regressão de Código Familiar:**
+  * **Não-Regressão:** Se o cadastro no GESUAS já possuir um código familiar de 11 dígitos (oriundo de atendimento mais recente), ele é preservado sem sobrescrita.
+  * **Saneamento de Campo em Branco:** Se o campo estiver vazio no GESUAS e o munícipe for o **Responsável Familiar (RF)**, a automação insere compulsoriamente o código de 11 dígitos da planilha.
 * **Limpeza de Telefones Legados:** Remoção completa de números residenciais/celulares legados desatualizados em *Editar família* para evitar falhas de contato operacional.
 * **Encerramento Cirúrgico:** Desmarcação atômica por índice de todas as opções indevidas (como *"Acompanhamento familiar particularizado"*) e seleção exclusiva da 3ª opção: **"Cadastramento/Atualização Cadastral na GESUAS"**.
 
@@ -74,42 +78,49 @@ Com foco na integridade das informações socioassistenciais e na conformidade c
 
 ## ⚙️ Regras de Negócio e Funcionalidades Centrais
 
-### 1. Conexão Acoplada via CDP (Chrome DevTools Protocol)
+### 1. Auditoria Ativa de Atendimentos (Sem Bypass de "OK")
+
+* **Auditoria Compulsória:** O robô não pula linhas sinalizadas como `"OK"` na planilha. Ele pesquisa a pessoa no sistema, abre o histórico em *Editar um Atendimento* e audita ativamente a existência do registro na data e hora especificadas.
+* **Recuperação de Omissões:** Caso a planilha indique `"OK"`, mas o atendimento não seja localizado no prontuário, a automação sinaliza `[AUDITORIA]`, efetua o lançamento retroativo pendente e registra a divergência no diagnóstico.
+
+### 2. Saneamento Compulsório de Código Familiar em Branco
+
+* Durante a navegação em *Editar família* (seja em checagem de atendimento existente, saneamento de consulta ou novo atendimento):
+  * Se o campo no GESUAS estiver em branco ou incompleto e a planilha fornecer um código válido de 11 dígitos:
+    * **Munícipe é RF:** O código é digitado e gravado no cadastro da família.
+    * **Munícipe é Dependente:** O código não é alterado, evitando a vinculação indevida de chaves em prontuários compartilhados.
+
+### 3. Conexão Acoplada via CDP (Chrome DevTools Protocol)
 
 * **Login pelo Operador:** O sistema inicializa uma sessão do Microsoft Edge conectada via porta `9222` (`--remote-debugging-port=9222`), permitindo que o operador realize seu login convencional no GESUAS manualmente antes de liberar a execução do robô.
-* **Resiliência e Desacoplamento:** Elimina a necessidade de embutir credenciais em código e dispensa a criação de perfis descartáveis a cada bateria de testes.
-* **Prontidão de Segurança:** A arquitetura desacoplada via CDP está estruturalmente preparada para ambientes com duplo fator (MFA) ou Gov.br.
+* **Resiliência e Desacoplamento:** Elimina credenciais embutidas em código e dispensa a recriação contínua de perfis. Preparado para autenticações por MFA ou Gov.br.
 
-### 2. Tratamento Especial de Visita Domiciliar e Edição Retroativa
+### 4. Tratamento Especial de Visita Domiciliar e Edição Retroativa
 
-* O sistema verifica termos como `VISITA`, `DOMICILI`, `DOMICILIO` ou `ENTREVISTA DOMICILIAR` tanto na coluna de serviço quanto na coluna de observações (`OBS`).
-* **Se o atendimento já constar no histórico:** O robô abre a modal de histórico, clica em *Editar* na linha correspondente, marca os checkboxes de *Visita Domiciliar* e *Busca Ativa*, confirma via botão *Iniciar*, ajusta a Forma de Acesso e Código Familiar em *Editar família* e encerra o atendimento selecionando exclusivamente a opção de atualização cadastral.
+* O sistema verifica termos como `VISITA`, `DOMICILI`, `DOMICILIO` ou `ENTREVISTA DOMICILIAR` tanto no serviço quanto nas observações (`OBS`).
+* **Atendimento já existente no histórico:** O robô clica em *Editar* na linha correspondente da data, marca *Visita Domiciliar* e *Busca Ativa*, confirma no botão *Iniciar*, ajusta Forma de Acesso e Código Familiar em *Editar família* e encerra na 3ª opção.
 
-### 3. Saneamento Inteligente em Atendimentos de CONSULTA
+### 5. Saneamento Inteligente em Atendimentos de CONSULTA
 
 * Se o munícipe for o **Responsável Familiar (RF)** e houver Código Familiar válido (11 dígitos) na planilha:
-  * O robô extrai o código de 11 dígitos após o rótulo do prontuário em tela.
-  * **Se faltar ou divergir:** Acessa *Editar um Atendimento*, reabre o atendimento mais recente via *Iniciar*, entra em *Editar família*, atualiza o código, limpa telefones, define Demanda Espontânea e finaliza no botão *Encerrar atendimento* com a 3ª opção.
-  * Se o código já estiver correto ou se a família não possuir atendimentos prévios, o sistema pula sem intervenções desnecessárias.
-* **Consultas sem Código Familiar (Excluídos / Orientações):** Identifica registros sem código de 11 dígitos (como munícipes excluídos ou orientações em balcão), registrando o status de consulta e a observação no relatório sem alterar o banco indevidamente.
+  * Extrai o código da tela do GESUAS;
+  * **Se divergir ou faltar:** Abre o histórico, reabre o atendimento mais recente via *Iniciar*, acessa *Editar família*, atualiza o código, limpa telefones, define Demanda Espontânea e encerra na 3ª opção.
+* **Consultas sem Código Familiar (Excluídos / Orientações):** Trata registros sem código de 11 dígitos (munícipes excluídos ou orientações em balcão), registrando o status de consulta e a observação no relatório sem alterar o banco indevidamente.
 
-### 4. Política de Não-Regressão e Resolução de Alertas no DOM
+### 6. Política de Não-Regressão e Resolução de Alertas no DOM
 
-* **Preservação de Dados Recentes:** Caso o prontuário no GESUAS já possua um código familiar de 11 dígitos preenchido em atendimento posterior ao mês em processamento, o código não é regredido, mantendo-se o dado mais recente.
-* **Captura de Conflito de Duplicidade:** Caso o GESUAS emita alerta modal de código familiar já existente em outro cadastro, o robô fecha o aviso, cancela a janela de edição e desobstrui as camadas de bloqueio de ponteiro (`ui-widget-overlay`), impedindo travamentos por timeout.
+* **Preservação de Dados Recentes:** Caso o prontuário no GESUAS já possua um código familiar de 11 dígitos consolidado em atendimentos posteriores ao mês trabalhado, o código existente é mantido.
+* **Captura de Conflito de Duplicidade:** Caso o GESUAS emita alerta modal de código familiar já cadastrado em outro prontuário, o robô captura o aviso, fecha a modal, cancela a janela de edição e desobstrui as camadas de bloqueio de ponteiro (`ui-widget-overlay`), prevenindo travamentos por timeout.
 
-### 5. Tratamento Dinâmico de Membros Não-RF
+### 7. Rastreabilidade e Diagnóstico Explícito de Falhas
 
-* Caso a pessoa atendida na planilha não seja o Responsável Familiar (RF):
-  1. Identifica a pessoa de referência exibida em tela;
-  2. Desmarca os membros familiares anteriores via script DOM;
-  3. Marca exclusivamente o membro atendido na lista de *Pessoas atendidas*;
-  4. Mantém a Forma de Acesso e a estrutura familiar principal protegidas de alterações indevidas.
+* Qualquer intercorrência operacional durante a execução (como munícipe não localizado, munícipe desligado, erro de carregamento ou falha no encerramento) é interceptada via bloco `try/except` seguro.
+* O erro é catalogado explicitamente com status `"ERRO"` ou mensagem descritiva no campo de diagnóstico da planilha de auditoria e do relatório oficial em PDF.
 
-### 6. Tratamento de Tipos e Nulos (Blindagem de Matrizes Pandas)
+### 8. Normalização Cromática no Relatório PDF
 
-* Conversão e tipagem explícita para `object` em colunas de identificadores e observações, evitando exceções de colisão de tipos (`float64`) ao registrar status `OK` em abas do Excel com campos inteiramente vazios.
-* Parsing seguro de células de data e hora do Excel via `pd.isna()`, prevenindo falhas críticas de `NaTType does not support strftime`.
+* O compilador ReportLab (`relatorio_pdf.py`) utiliza funções de normalização Unicode (`NFKD`), eliminando divergências entre strings acentuadas (`INCLUSÃO` vs `INCLUSAO`, `EXCLUSÃO` vs `EXCLUSAO`).
+* Todas as linhas da tabela recebem estilização cromática padronizada conforme a legenda, impedindo que linhas de atendimento fiquem em branco por falha de correspondência de caracteres.
 
 ---
 
@@ -120,7 +131,7 @@ A interface foi projetada com o framework **CustomTkinter** com alternador dinâ
 | 🔍 Módulo 1: Auditoria Cadastral (PDFs vs GESUAS) | 🤖 Módulo 2: Robô de Lançamentos (Planilhas Excel) |
 | :---: | :---: |
 | ![Auditoria Cadastral](IMAGENS/aba_auditoria.png) | ![Robô de Lançamentos](IMAGENS/aba_automacao.png) |
-| *Varredura e validação cronológica de prontuários digitalizados com checkpoints de lote.* | *Processamento em lote de atendimentos com anti-duplicidade e saneamento cadastral.* |
+| *Varredura e validação cronológica de prontuários digitalizados com checkpoints de lote.* | *Processamento em lote de atendimentos com auditoria ativa, anti-duplicidade e saneamento.* |
 
 ---
 
@@ -140,11 +151,11 @@ SUITE_GESUAS/
 │   │
 │   ├── Automacao/                  # Módulo 2: Robô de Lançamentos (Planilhas Excel)
 │   │   ├── __init__.py             # Inicializador do pacote
-│   │   ├── automacao_engine.py     # Motor operacional principal via Playwright CDP
+│   │   ├── automacao_engine.py     # Motor operacional com auditoria ativa e saneamento
 │   │   ├── config.py               # Definições de portas, perfis e parâmetros locais
 │   │   ├── gesuas_bot.py           # Procedimentos CLI e manipulação de formulários
 │   │   ├── notificacoes.py         # Tratamento de diálogos e alertas visuais
-│   │   └── relatorio_pdf.py        # Relatório de atendimentos com legenda cromática
+│   │   └── relatorio_pdf.py        # Relatório de atendimentos com normalização cromática
 │   │
 │   └── __init__.py                 # Pacote raiz do core
 │
@@ -170,7 +181,7 @@ As pastas de armazenamento de resultados **não integram o versionamento estáti
 | Diretório Gerado | Finalidade Operacional |
 | :--- | :--- |
 | `PLANILHAS_EXCEL/` | Armazena a cópia sincronizada da planilha com status `OK` preenchido (`CADASTRO_ATUALIZADO_[MÊS]_[TIMESTAMP].xlsx`) e o relatório analítico em formato de planilha. A planilha de entrada original nunca é sobrescrita. |
-| `RELATORIOS_PDF/` | Recebe os relatórios oficiais formatados em PDF (paisagem), contendo métricas executivas consolidadas, totalizadores por tipo de serviço e estilização cromática. |
+| `RELATORIOS_PDF/` | Recebe os relatórios oficiais formatados em PDF (paisagem), contendo métricas executivas consolidadas, totalizadores por tipo de serviço e estilização cromática blindada. |
 | `CHECKPOINTS/` | Registra arquivos temporários (`.json`) com o progresso do lote auditado. Permite pausar e retomar lotes volumosos de onde pararam ou reiniciar do início sob demanda. |
 
 ---
@@ -180,7 +191,7 @@ As pastas de armazenamento de resultados **não integram o versionamento estáti
 * **Python 3.10+** (64 bits)
 * **CustomTkinter:** Framework moderno de componentes GUI com suporte a temas e redimensionamento responsivo.
 * **Playwright:** Controle e inspeção do navegador via protocolo CDP.
-* **Pandas & OpenPyXL:** Leitura, manipulação de matrizes de dados e exportação de planilhas Excel.
+* **Pandas & OpenPyXL:** Leitura, manipulação de matrizes de dados e exportação de planilhas Excel com tipagem protegida.
 * **ReportLab:** Mecanismo vetorial de compilação de PDFs com numeração de páginas em duas passagens (`NumberedCanvas`).
 * **PDFPlumber:** Extração de texto e metadados a partir dos comprovantes digitais.
 

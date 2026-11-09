@@ -7,13 +7,14 @@ AUTORIA: Juliano França da Mata
 CARGO: Agente Administrativo / Operador do Cadastro Único - CRAS Sul (Campo Belo/MG)
 FORMAÇÃO: Bacharel em Ciência de Dados e Inteligência Artificial | Tecnólogo em Gestão de TI
 DESCRIÇÃO: Orquestra o pipeline de lançamentos da Suite GESUAS com:
+            - Auditoria ativa de linhas (não pula 'OK': abre e valida no histórico);
+            - Inclusão do Código Familiar se estiver em branco no GESUAS e pessoa for RF;
             - Tipagem blindada contra falhas de float64 em colunas vazias;
             - Tratamento para consultas sem código familiar (ex: excluídos / orientações);
             - Política de não-regressão cadastral (preserva código mais recente existente);
             - Tratamento ativo de modal de código duplicado com descarte gracioso;
             - Encerramento cirúrgico com a 3ª opção isolada por índice direto;
             - Gravação de checkboxes via botão 'Iniciar' na edição de atendimento;
-            - Saneamento cadastral compulsório em 'Editar família';
             - Retorno confiável à sanfona 'Buscar pessoa' e blindagem anti-overlay.
 ========================================================================================
 """
@@ -311,13 +312,14 @@ def obter_codigo_familiar_tela(page) -> str:
         return ""
 
 
-def aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf: bool, fila):
+def aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf: bool, fila, eh_rf: bool = True):
     """
     Acessa 'Editar família' (botão abaixo à esquerda) para sanear:
-    1. Código Familiar: só preenche se o campo na tela estiver vazio ou incompleto.
-       Se já possuir 11 dígitos (atendimento consolidado), preserva o existente.
-    2. Limpa telefones residenciais e celulares obsoletos.
-    3. Define a Forma de Acesso.
+    1. Código Familiar:
+       - Se já houver 11 dígitos no GESUAS, preserva (não-regressão);
+       - Se estiver em branco e a pessoa for RF, acrescenta o código da planilha;
+    2. Limpa telefones residenciais e celulares obsoletos;
+    3. Define a Forma de Acesso;
     4. Trata alertas de duplicidade de código sem reter a camada de overlay.
     """
     fechar_todas_modais_ativas(page)
@@ -339,7 +341,7 @@ def aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf: bool, fila):
         fechar_todas_modais_ativas(page)
         return
 
-    # 1. Localização e Verificação de Não-Regressão do Código Familiar
+    # 1. Localização e Verificação do Código Familiar
     campo_cod = modal_fam.locator('text="Código familiar"').locator('xpath=following-sibling::input | ../following-sibling::*//input | following::input[1]').first
     if not campo_cod.is_visible():
         campo_cod = modal_fam.locator('input[name*="codigo_familiar"], input[id*="codigo_familiar"]').first
@@ -351,12 +353,15 @@ def aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf: bool, fila):
         if len(valor_atual_tela) == 11:
             fila.put({"tipo": "log", "msg": f"   -> [PRESERVADO]: Família já possui Código ({valor_atual_tela}) no GESUAS. Mantendo mais recente.\n"})
         elif len(cod_limpo_planilha) == 11:
-            fila.put({"tipo": "log", "msg": f"   -> Atualizando Código Familiar para: {cod_limpo_planilha}...\n"})
-            campo_cod.click()
-            campo_cod.press("Control+A")
-            campo_cod.press("Backspace")
-            campo_cod.type(cod_limpo_planilha, delay=25)
-            page.wait_for_timeout(150)
+            if eh_rf:
+                fila.put({"tipo": "log", "msg": f"   -> [SANEAMENTO RF]: Código em branco no GESUAS. Inserindo código da planilha: {cod_limpo_planilha}...\n"})
+                campo_cod.click()
+                campo_cod.press("Control+A")
+                campo_cod.press("Backspace")
+                campo_cod.type(cod_limpo_planilha, delay=25)
+                page.wait_for_timeout(150)
+            else:
+                fila.put({"tipo": "log", "msg": "   -> [MEMBRO DEPENDENTE]: Código em branco no GESUAS não alterado por não ser RF.\n"})
 
     # 2. Limpeza de Telefones Legados
     fila.put({"tipo": "log", "msg": "   -> Limpando campo de telefone residencial / celular...\n"})
@@ -550,21 +555,19 @@ def sanear_consulta_ultimo_atendimento(page, cod_fam_planilha, fila) -> str:
     page.wait_for_timeout(1800)
     fechar_todas_modais_ativas(page)
 
-    aplicar_saneamento_editar_familia(page, cod_planilha_limpo, eh_visita_rf=False, fila=fila)
+    aplicar_saneamento_editar_familia(page, cod_planilha_limpo, eh_visita_rf=False, fila=fila, eh_rf=True)
     encerrar_atendimento_ativo(page, fila)
     retornar_para_busca(page)
 
     return "Consulta - Código Familiar saneado no último atendimento"
 
 
-def checar_duplicidade_e_adequar_visita(page, data_hora_str, data_atend, hora_atend, eh_visita_rf: bool, cod_fam: str, fila=None) -> tuple[bool, str]:
+def checar_duplicidade_e_adequar_visita(page, data_hora_str, data_atend, hora_atend, eh_visita_rf: bool, cod_fam: str, eh_rf: bool, fila=None) -> tuple[bool, str]:
     """
     Verifica se o atendimento já consta no histórico de 'Editar um Atendimento'.
-    Se for Visita Domiciliar pré-existente com RF:
-      - Clica em 'Editar' na linha correspondente;
-      - Marca 'Visita Domiciliar' e 'Busca Ativa' e grava no botão 'Iniciar';
-      - Saneia a família e encerra na 3ª opção.
-    Garante que qualquer modal ou overlay remanescente seja fechado compulsoriamente.
+    - Se for Visita Domiciliar pré-existente com RF: reabre, marca checkboxes e grava;
+    - Se o Código Familiar estiver em branco no GESUAS e for RF, aproveita para sanear o código;
+    - Retorna se já existe e o diagnóstico detalhado.
     """
     def log(msg):
         if fila:
@@ -606,6 +609,7 @@ def checar_duplicidade_e_adequar_visita(page, data_hora_str, data_atend, hora_at
     if ja_cadastrado:
         log(f"   -> [HISTÓRICO LOCALIZADO]: Atendimento de {data_hora_str} encontrado no histórico.\n")
         
+        # 1. Abre a edição da linha correspondente à data
         page.evaluate("""(dataAlvo) => {
             const dialogs = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
             const modal = dialogs.find(d => d.innerText.includes('Editar Atendimento') || d.innerText.includes('Data do atendimento'));
@@ -630,6 +634,11 @@ def checar_duplicidade_e_adequar_visita(page, data_hora_str, data_atend, hora_at
         }""", data_atend)
 
         page.wait_for_timeout(1800)
+
+        # 2. Verifica se o código familiar está em branco na tela para RF
+        cod_tela = obter_codigo_familiar_tela(page)
+        cod_planilha_limpo = re.sub(r'\D', '', str(cod_fam)).strip() if cod_fam and str(cod_fam).lower() not in ['nan', 'none'] else ""
+        precisa_sanear_codigo = (not cod_tela and len(cod_planilha_limpo) == 11 and eh_rf)
 
         if eh_visita_rf:
             log("   -> Marcando checkboxes 'Visita Domiciliar' e 'Busca Ativa'...\n")
@@ -661,14 +670,34 @@ def checar_duplicidade_e_adequar_visita(page, data_hora_str, data_atend, hora_at
             page.wait_for_timeout(2000)
             fechar_todas_modais_ativas(page)
 
-            aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf=True, fila=fila)
+            aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf=True, fila=fila, eh_rf=eh_rf)
             encerrar_atendimento_ativo(page, fila)
-            diag_visita = "Visita Domiciliar editada e confirmada no GESUAS"
+            diag_visita = "Visita Domiciliar confirmada e saneada no GESUAS"
+
+        elif precisa_sanear_codigo:
+            log("   -> [SANEAMENTO]: Atendimento existente localizado e Código Familiar em branco no GESUAS. Saneando família...\n")
+            # Clica em Iniciar para vincular
+            page.evaluate("""() => {
+                const modais = Array.from(document.querySelectorAll('.ui-dialog:not([style*="display: none"])'));
+                for (const m of modais) {
+                    const btnIniciar = Array.from(m.querySelectorAll('button, a')).find(b => b.innerText.trim().toUpperCase() === 'INICIAR');
+                    if (btnIniciar) {
+                        btnIniciar.click();
+                        return;
+                    }
+                }
+            }""")
+            page.wait_for_timeout(1800)
+            fechar_todas_modais_ativas(page)
+
+            aplicar_saneamento_editar_familia(page, cod_fam, eh_visita_rf=False, fila=fila, eh_rf=True)
+            encerrar_atendimento_ativo(page, fila)
+            diag_visita = "Atendimento existente (Código Familiar preenchido para RF)"
 
         else:
-            log("   -> Atendimento comum já existente. Fechando histórico...\n")
+            log("   -> Atendimento comum já existente auditado. Fechando histórico...\n")
             fechar_todas_modais_ativas(page)
-            diag_visita = "Atendimento comum existente (Auditado)"
+            diag_visita = "Atendimento existente em conformidade (Auditado no GESUAS)"
 
         retornar_para_busca(page)
         return True, diag_visita
@@ -771,7 +800,7 @@ def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, 
     btn_iniciar_modal.click()
     page.wait_for_timeout(2000)
 
-    aplicar_saneamento_editar_familia(page, cod_fam_planilha, eh_visita_rf=eh_visita_rf, fila=fila)
+    aplicar_saneamento_editar_familia(page, cod_fam_planilha, eh_visita_rf=eh_visita_rf, fila=fila, eh_rf=eh_rf)
     encerrar_atendimento_ativo(page, fila)
     retornar_para_busca(page)
 
@@ -784,7 +813,7 @@ def registrar_atendimento_completo(page, data_hora_str, nome, cod_fam_planilha, 
 def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_login_pronto, fila, cancel_event):
     """Orquestrador principal chamado pela interface SuiteGesuasApp."""
     try:
-        fila.put({"tipo": "log", "msg": f"[MOTOR GESUAS_BOT]: Iniciando rotina de lançamentos com suporte a Visita Domiciliar.\n"})
+        fila.put({"tipo": "log", "msg": f"[MOTOR GESUAS_BOT]: Iniciando rotina com Auditoria Ativa e Validação de Histórico.\n"})
         fila.put({"tipo": "log", "msg": f" -> Planilha: {os.path.basename(caminho_planilha)} [Aba: {nome_aba}]\n"})
 
         pasta_planilhas = os.path.join(pasta_destino_base, "PLANILHAS_EXCEL")
@@ -891,24 +920,9 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
 
                 eh_visita_planilha = eh_servico_visita_domiciliar(servico, obs_planilha)
 
-                # REGRA 1: Pular se já estiver OK e NÃO for visita domiciliar
-                if "OK" in status_gesuas_atual and not eh_visita_planilha:
-                    fila.put({"tipo": "log", "msg": " -> [PULADO]: Atendimento comum já sinalizado como 'OK' na planilha.\n"})
-                    resultados_robo.append({
-                        "Linha": num_linha,
-                        "Nome": nome_municipe,
-                        "CPF": cpf_raw,
-                        "Data": data_atend,
-                        "Hora": hora_atend,
-                        "Serviço": servico,
-                        "Cód. Familiar Planilha": cod_fam_planilha,
-                        "Status Robô": "JÁ CADASTRADO",
-                        "Diagnóstico": obs_planilha if obs_planilha else "Registro prévio existente"
-                    })
-                    notificar_progresso()
-                    continue
-
-                # REGRA 2: CONSULTA (COM OU SEM CÓDIGO FAMILIAR NA PLANILHA)
+                # =========================================================================
+                # REGRA: CONSULTA (COM OU SEM CÓDIGO FAMILIAR NA PLANILHA)
+                # =========================================================================
                 if "CONSULTA" in servico:
                     cod_limpo = re.sub(r'\D', '', str(cod_fam_planilha)).strip() if cod_fam_planilha and str(cod_fam_planilha).lower() not in ['nan', 'none', 'nat'] else ""
 
@@ -966,10 +980,16 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                     notificar_progresso()
                     continue
 
-                # 1. Pesquisa do munícipe
+                # =========================================================================
+                # FLUXO GERAL: ATUALIZAÇÕES, INCLUSÕES E AUDITORIA COMPULSÓRIA
+                # =========================================================================
+                # 1. Pesquisa do munícipe no GESUAS
                 achou = buscar_municipe(page, nome_municipe, cpf_raw, fila)
                 if not achou:
-                    fila.put({"tipo": "log", "msg": f" -> [NÃO LOCALIZADO]: Munícipe não encontrado no GESUAS.\n"})
+                    msg_diag = f"Munícipe não localizado no GESUAS ({obs_planilha})".strip() if obs_planilha else "Cadastrar pessoa/família no GESUAS"
+                    if "OK" in status_gesuas_atual:
+                        msg_diag = f"[DIVERGÊNCIA PLANILHA 'OK']: {msg_diag}"
+                    fila.put({"tipo": "log", "msg": f" -> [NÃO LOCALIZADO]: {msg_diag}\n"})
                     resultados_robo.append({
                         "Linha": num_linha,
                         "Nome": nome_municipe,
@@ -979,7 +999,7 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                         "Serviço": servico,
                         "Cód. Familiar Planilha": cod_fam_planilha,
                         "Status Robô": "NÃO LOCALIZADO",
-                        "Diagnóstico": obs_planilha if obs_planilha else "Cadastrar pessoa/família no GESUAS"
+                        "Diagnóstico": msg_diag
                     })
                     notificar_progresso()
                     continue
@@ -988,6 +1008,9 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                 status_acesso = verificar_pessoa_desligada_ou_acessar_familia(page, nome_municipe, fila)
                 if status_acesso == "DESLIGADA":
                     retornar_para_busca(page)
+                    msg_diag = f"Munícipe desligado no GESUAS ({obs_planilha})".strip() if obs_planilha else "Munícipe consta como desligado no sistema"
+                    if "OK" in status_gesuas_atual:
+                        msg_diag = f"[DIVERGÊNCIA PLANILHA 'OK']: {msg_diag}"
                     resultados_robo.append({
                         "Linha": num_linha,
                         "Nome": nome_municipe,
@@ -997,7 +1020,7 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                         "Serviço": servico,
                         "Cód. Familiar Planilha": cod_fam_planilha,
                         "Status Robô": "DESLIGADA",
-                        "Diagnóstico": obs_planilha if obs_planilha else "Munícipe consta como desligado no sistema"
+                        "Diagnóstico": msg_diag
                     })
                     notificar_progresso()
                     continue
@@ -1012,12 +1035,15 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                     else:
                         fila.put({"tipo": "log", "msg": f" -> [AVISO VISITA]: Munícipe NÃO é o RF (RF: {nome_rf_tela}). Visita restrita ao titular.\n"})
 
-                # 4. Verificação de duplicidade / conferência de visita no GESUAS
-                ja_tem, diag_visita = checar_duplicidade_e_adequar_visita(page, data_hora_str, data_atend, hora_atend, eh_visita_rf, cod_fam_planilha, fila)
+                # 4. Verificação de atendimento pré-existente no histórico do GESUAS
+                ja_tem, diag_visita = checar_duplicidade_e_adequar_visita(
+                    page, data_hora_str, data_atend, hora_atend, eh_visita_rf, cod_fam_planilha, eh_rf=eh_rf, fila=fila
+                )
+
                 if ja_tem:
                     df.at[idx, col_gesuas] = "OK"
                     alteracoes_feitas = True
-                    diag_final = diag_visita if diag_visita else (obs_planilha if obs_planilha else f"Atendimento existente em {data_hora_str} (Auditado)")
+                    diag_final = diag_visita if diag_visita else (obs_planilha if obs_planilha else f"Atendimento em {data_hora_str} confirmado no GESUAS")
                     resultados_robo.append({
                         "Linha": num_linha,
                         "Nome": nome_municipe,
@@ -1032,15 +1058,25 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                     notificar_progresso()
                     continue
 
-                # 5. Lançamento e encerramento de atendimento novo
+                # 5. Se constava como 'OK' na planilha mas NÃO foi achado no histórico:
+                # O robô procede com o lançamento real do atendimento pendente
+                if "OK" in status_gesuas_atual:
+                    fila.put({"tipo": "log", "msg": " -> [AUDITORIA]: Planilha marcava 'OK', mas o atendimento não constava no GESUAS. Efetuando lançamento...\n"})
+
                 fila.put({"tipo": "log", "msg": f" -> [LANÇAMENTO]: A registrar atendimento de {servico} ({data_hora_str})...\n"})
-                obs_membro = registrar_atendimento_completo(page, data_hora_str, nome_municipe, cod_fam_planilha, servico, obs_planilha, cpf_raw, fila)
+                try:
+                    obs_membro = registrar_atendimento_completo(page, data_hora_str, nome_municipe, cod_fam_planilha, servico, obs_planilha, cpf_raw, fila)
+                    df.at[idx, col_gesuas] = "OK"
+                    alteracoes_feitas = True
+                    fila.put({"tipo": "log", "msg": f" -> [SUCESSO]: Atendimento registrado e encerrado no GESUAS com êxito!\n"})
 
-                df.at[idx, col_gesuas] = "OK"
-                alteracoes_feitas = True
-                fila.put({"tipo": "log", "msg": f" -> [SUCESSO]: Atendimento registrado e encerrado no GESUAS com êxito!\n"})
-
-                diag_final = f"{obs_planilha} {obs_membro}".strip() if (obs_planilha or obs_membro) else "Atendimento lançado no GESUAS"
+                    diag_final = f"{obs_planilha} {obs_membro}".strip() if (obs_planilha or obs_membro) else "Atendimento lançado no GESUAS"
+                    status_final_robo = "SUCESSO"
+                except Exception as e_lanc:
+                    diag_final = f"Erro no lançamento: {str(e_lanc)[:45]}"
+                    status_final_robo = "ERRO"
+                    fila.put({"tipo": "log", "msg": f" -> [FALHA LANÇAMENTO]: {diag_final}\n"})
+                    retornar_para_busca(page)
 
                 resultados_robo.append({
                     "Linha": num_linha,
@@ -1050,7 +1086,7 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
                     "Hora": hora_atend,
                     "Serviço": servico,
                     "Cód. Familiar Planilha": cod_fam_planilha,
-                    "Status Robô": "SUCESSO",
+                    "Status Robô": status_final_robo,
                     "Diagnóstico": diag_final
                 })
 
@@ -1123,4 +1159,3 @@ def processar_automacao(caminho_planilha, pasta_destino_base, nome_aba, evento_l
     except Exception as erro:
         fila.put({"tipo": "log", "msg": f"\n[ERRO CRÍTICO NA AUTOMAÇÃO]: {str(erro)}\n"})
         fila.put({"tipo": "fim_robo", "sucesso": False})
-        
